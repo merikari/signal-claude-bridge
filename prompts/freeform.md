@@ -5,7 +5,7 @@ Rules:
 2. Any markdown file you create must include frontmatter:
    ```
    ---
-   tags: [ai-generated, claude-code, claude-sonnet-4-6, signal-bridge]
+   tags: [ai-generated, signal-bridge]
    source: signal
    request: <one-line paraphrase of the user's message>
    created: <YYYY-MM-DD HH:MM>

@@ -36,10 +36,17 @@ Phone (Signal)
                                         │
                                         ▼
                               claude -p <message>
-                              cwd = vault / output folder
+                              cwd = VAULT_ROOT
+                                        │
+                                        ├── loads VAULT_ROOT/CLAUDE.md (if present)
+                                        └── loads Signal inbox/CLAUDE.md  ← domain templates
                                         │
                                         ▼
-                              writes YYYY-MM-DD <slug>.md
+                              classifies domain from Signal inbox/CLAUDE.md § Domains
+                              follows that domain's template
+                                        │
+                                        ▼
+                              writes Signal inbox/YYYY-MM-DD <slug>.md
                                         │
                                         ▼
                          POST /v2/send  (one-line ack to you)
@@ -164,22 +171,43 @@ All settings live in `.env` (copy from `.env.example`):
 
 ---
 
+## Vault setup
+
+The bridge runs `claude -p` with `cwd` set to `VAULT_ROOT`. Claude Code automatically reads any `CLAUDE.md` files it finds there — this is how the output format and domain templates reach the model.
+
+This repo ships a ready-to-use template under `vault-template/`. Copy it into your vault:
+
+```powershell
+# from the repo root — adjust destination to your VAULT_ROOT
+xcopy /E /I vault-template\* "C:\path\to\your\vault\"
+```
+
+What you get:
+
+| File | Purpose |
+|------|---------|
+| `Signal inbox/CLAUDE.md` | Domain templates (term, product, travel), output schema, tagging rules |
+
+**Editing domain templates:** `Signal inbox/CLAUDE.md` lives in your vault, not the repo. Changes take effect immediately — no daemon restart. To add a new domain, just add a `###` subsection; `prompts/research.md` is generic and needs no changes.
+
+If you use [Obsidian](https://obsidian.md), the included templates produce Obsidian-flavoured markdown — YAML frontmatter, `[[wikilinks]]`, and `ai-generated` tags. If you use a different tool, edit `Signal inbox/CLAUDE.md` and the prompt files to match your preferred format. The bridge itself is format-agnostic.
+
+---
+
 ## Customising Claude's behaviour
 
 Edit the prompt files — no code changes needed:
 
-- `prompts/research.md` — governs short-topic research notes (structure, length, language matching, source requirements)
+- `prompts/research.md` — classifies the message domain, then delegates formatting to `Signal inbox/CLAUDE.md`
 - `prompts/freeform.md` — governs longer instructions (output location, tagging, safety guardrails)
 
 Both prompts instruct Claude to return a single `OK: ...` or `FAIL: ...` line on stdout, which is forwarded back to you as the Signal reply.
-
-> **Note on output format:** The included prompts produce [Obsidian](https://obsidian.md)-flavoured markdown — YAML frontmatter, `[[wikilinks]]`, and tags like `ai-generated`. If you use a different tool or just want plain markdown, edit the prompts to match your preferred format. The bridge itself is format-agnostic.
 
 ---
 
 ## Security
 
-- **Signal E2EE** is end-to-end encrypted end-to-end. Only contacts you've accepted can reach your linked account.
+- **Signal E2EE** — messages are end-to-end encrypted. Only contacts you've accepted can reach your linked account.
 - **Container is loopback-bound** (`127.0.0.1:8080`) — unreachable from the LAN or internet.
 - **Sender allowlist** — `ALLOWED_SENDERS` defaults to your own number. Messages from anyone else are logged and dropped before Claude is invoked.
 - **No inbound ports** are opened on your router.
