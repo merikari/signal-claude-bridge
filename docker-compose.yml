@@ -1,0 +1,19 @@
+services:
+  signal-cli-rest-api:
+    # Pinned to stable release; bump deliberately after reviewing changelog.
+    # Release: https://github.com/bbernhard/signal-cli-rest-api/releases
+    image: bbernhard/signal-cli-rest-api:0.98
+    container_name: signal-cli-rest-api
+    restart: unless-stopped
+    ports:
+      # Bind to loopback only. The listener talks to this via 127.0.0.1:8080.
+      # Change to "0.0.0.0:8080:8080" only if another host on the LAN needs access.
+      - "127.0.0.1:8080:8080"
+    environment:
+      MODE: normal
+    volumes:
+      # Named volume — signal account state (keys, device pairing) persists here.
+      - signal-cli-config:/home/.local/share/signal-cli
+
+volumes:
+  signal-cli-config:
