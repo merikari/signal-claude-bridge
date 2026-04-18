@@ -2,7 +2,7 @@
 
 Send a word or phrase to yourself on Signal — get a researched markdown note written to a local folder within seconds.
 
-Built on top of [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) and [Claude Code](https://claude.ai/code). No cloud relay, no HA dependency — just a Docker container and a Python daemon running on your PC.
+Built on top of [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) and [Claude Code](https://claude.ai/code). No cloud relay, just a Docker container and a Python daemon running on your PC.
 
 ---
 
