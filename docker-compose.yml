@@ -14,6 +14,13 @@ services:
     volumes:
       # Named volume — signal account state (keys, device pairing) persists here.
       - signal-cli-config:/home/.local/share/signal-cli
+    # Cap the json-file log driver — without this, /v1/receive polling every 3 s
+    # grows the per-container log unbounded and eventually fills docker_data.vhdx.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   signal-cli-config:
