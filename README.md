@@ -226,23 +226,6 @@ docker compose pull && docker compose up -d
 
 ---
 
-## Disk space
-
-The bridge polls Signal every 3 seconds. Without log rotation the container's json log grows unbounded inside Docker's WSL2 VHDX and can fill your system drive over time.
-
-Log rotation is pre-configured in `docker-compose.yml` (`max-size: 10m`, `max-file: 3`). If you are migrating from an older version without rotation, run:
-
-```powershell
-docker compose down   # recreates the container; named volume (pairing keys) is preserved
-docker compose up -d
-```
-
-**If `docker_data.vhdx` has already grown large** and you need to reclaim space, the easiest fix is to move Docker Desktop's disk image to a drive with more room: Docker Desktop → Settings → Resources → Advanced → Disk image location. Docker copies the data and removes the old file automatically.
-
-> **Note:** VHDX compaction via diskpart is unreliable on Windows when any WSL distro is running (including unrelated ones like Ubuntu), because WSL restarts the Docker VM in the background faster than diskpart can acquire the file lock. Moving the disk image is the more reliable path.
-
----
-
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -251,7 +234,7 @@ docker compose up -d
 | `FileNotFoundError` on startup | `CLAUDE_BIN` not set or path wrong | Set full path in `.env`; re-run `install-service.ps1` after Claude upgrades |
 | Task shows `Ready` not `Running` | pythonw crashed on startup | Check `logs\bridge.log` and `logs\bridge-err.log` |
 | Messages received but no note written | Claude failed silently | Signal reply will say `FAIL: ...`; check logs for details |
-| System drive filling up | Container log not rotated | See [Disk space](#disk-space) section above |
+| System drive filling up | Container log not rotated | Ensure `logging:` block is present in `docker-compose.yml`; recreate the container with `docker compose down && docker compose up -d` to apply it |
 
 ---
 
