@@ -237,23 +237,9 @@ docker compose down   # recreates the container; named volume (pairing keys) is 
 docker compose up -d
 ```
 
-Then compact the VHDX to reclaim the space on disk:
+**If `docker_data.vhdx` has already grown large** and you need to reclaim space, the easiest fix is to move Docker Desktop's disk image to a drive with more room: Docker Desktop → Settings → Resources → Advanced → Disk image location. Docker copies the data and removes the old file automatically.
 
-```powershell
-wsl --shutdown
-Optimize-VHD -Path "$env:LOCALAPPDATA\Docker\wsl\disk\docker_data.vhdx" -Mode Full
-```
-
-If `Optimize-VHD` is unavailable (no Hyper-V tools), use diskpart instead:
-
-```
-diskpart
-select vdisk file="C:\Users\<you>\AppData\Local\Docker\wsl\disk\docker_data.vhdx"
-attach vdisk readonly
-compact vdisk
-detach vdisk
-exit
-```
+> **Note:** VHDX compaction via diskpart is unreliable on Windows when any WSL distro is running (including unrelated ones like Ubuntu), because WSL restarts the Docker VM in the background faster than diskpart can acquire the file lock. Moving the disk image is the more reliable path.
 
 ---
 
