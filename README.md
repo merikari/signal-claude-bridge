@@ -163,7 +163,8 @@ All settings live in `.env` (copy from `.env.example`):
 | `CLAUDE_BIN` | `claude` | Path to Claude Code CLI executable |
 | `CLAUDE_MODEL` | *(CLI default)* | Model for `claude -p`, e.g. `claude-sonnet-4-6` |
 | `CLAUDE_TIMEOUT` | `300` | Max seconds to wait for Claude subprocess |
-| `SIGNAL_API_URL` | `http://127.0.0.1:8080` | signal-cli-rest-api base URL |
+| `SIGNAL_API_PORT` | `8090` | Host port for the signal-cli-rest-api container — change if it conflicts with another service |
+| `SIGNAL_API_URL` | `http://127.0.0.1:8090` | signal-cli-rest-api base URL — must use the same port as `SIGNAL_API_PORT` |
 | `SIGNAL_NUMBER` | *(required)* | Your E.164 Signal number |
 | `ALLOWED_SENDERS` | `SIGNAL_NUMBER` | Comma-separated allowlist of sender numbers |
 | `POLL_INTERVAL` | `3` | Seconds between `/v1/receive` polls |
