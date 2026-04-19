@@ -6,9 +6,9 @@ services:
     container_name: signal-cli-rest-api
     restart: unless-stopped
     ports:
-      # Bind to loopback only. The listener talks to this via 127.0.0.1:8080.
-      # Change to "0.0.0.0:8080:8080" only if another host on the LAN needs access.
-      - "127.0.0.1:8080:8080"
+      # Bind to loopback only. Host port is set via SIGNAL_API_PORT in .env (default 8090).
+      # Change 127.0.0.1 to 0.0.0.0 only if another host on the LAN needs access.
+      - "127.0.0.1:${SIGNAL_API_PORT:-8090}:8080"
     environment:
       MODE: normal
     volumes:
