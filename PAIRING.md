@@ -18,7 +18,7 @@ Ask the API for a linking URI. The QR image is returned as a PNG.
 
 ```powershell
 # Save the QR to a file you can open in Windows
-curl.exe "http://127.0.0.1:8080/v1/qrcodelink?device_name=signal-claude-bridge" -o qr.png
+curl.exe "http://127.0.0.1:8090/v1/qrcodelink?device_name=signal-claude-bridge" -o qr.png
 start qr.png
 ```
 
@@ -42,7 +42,7 @@ You'll need this in `.env`. It's the E.164 number of your main Signal account (e
 Verify the container knows about it:
 
 ```powershell
-curl.exe "http://127.0.0.1:8080/v1/accounts"
+curl.exe "http://127.0.0.1:8090/v1/accounts"
 ```
 
 Expected response: a JSON array containing your number.
@@ -50,7 +50,7 @@ Expected response: a JSON array containing your number.
 ## 5. Smoke test — send yourself a message
 
 ```powershell
-curl.exe -X POST "http://127.0.0.1:8080/v2/send" `
+curl.exe -X POST "http://127.0.0.1:8090/v2/send" `
   -H "Content-Type: application/json" `
   -d "{\"message\":\"hello from signal-cli-rest-api\",\"number\":\"+358XXXXXXXX\",\"recipients\":[\"+358XXXXXXXX\"]}"
 ```
@@ -77,7 +77,7 @@ After a Claude upgrade, the version segment in the path changes — update `.env
 Send yourself a message **from** your phone (to yourself; Signal calls this "Note to Self"). Then:
 
 ```powershell
-curl.exe "http://127.0.0.1:8080/v1/receive/+358XXXXXXXX"
+curl.exe "http://127.0.0.1:8090/v1/receive/+358XXXXXXXX"
 ```
 
 Expected: JSON with your message payload under `envelope.dataMessage.message`.
