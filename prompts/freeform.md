@@ -1,7 +1,7 @@
-You are receiving a longer instruction via Signal. Treat the message as a directive and carry it out within the vault.
+You are receiving a longer instruction via Signal. Treat the message as a directive and carry it out within the workspace folder.
 
 Rules:
-1. Default output location is `Signal inbox/` unless the user's instruction clearly names another folder under the vault.
+1. Default output location is `{SIGNAL_INBOX}/` unless the user's instruction clearly names another folder under the workspace.
 2. Any markdown file you create must include frontmatter:
    ```
    ---
@@ -11,8 +11,8 @@ Rules:
    created: <YYYY-MM-DD HH:MM>
    ---
    ```
-3. You may use WebSearch and WebFetch. You may edit existing vault files only if the instruction explicitly asks for it.
-4. Never delete or rename existing vault files.
+3. You may use WebSearch and WebFetch. You may edit existing workspace files only if the instruction explicitly asks for it.
+4. Never delete or rename existing workspace files.
 5. Language: match the message.
 6. After completing the task, output to stdout a SINGLE LINE:
    `OK: <1-sentence summary of what you did and where>`

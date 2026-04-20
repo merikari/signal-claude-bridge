@@ -1,7 +1,7 @@
 """Signal → Claude Code bridge (polling daemon).
 
 Polls signal-cli-rest-api for incoming messages, classifies each one,
-invokes `claude -p` against the Obsidian vault, and sends a one-line
+invokes `claude -p` against the workspace folder, and sends a one-line
 confirmation back via Signal.
 """
 
@@ -30,9 +30,11 @@ ALLOWED_SENDERS = {s.strip() for s in os.environ.get("ALLOWED_SENDERS", SIGNAL_N
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "3"))
 SHORT_TOPIC_MAX_TOKENS = int(os.environ.get("SHORT_TOPIC_MAX_TOKENS", "4"))
 
+SIGNAL_INBOX = os.environ.get("SIGNAL_INBOX", "Signal inbox")
+
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-RESEARCH_PROMPT = (PROMPTS_DIR / "research.md").read_text(encoding="utf-8")
-FREEFORM_PROMPT = (PROMPTS_DIR / "freeform.md").read_text(encoding="utf-8")
+RESEARCH_PROMPT = (PROMPTS_DIR / "research.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
+FREEFORM_PROMPT = (PROMPTS_DIR / "freeform.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
 
 # Short-topic heuristic: ≤ 4 tokens, no sentence punctuation, ≤ 60 chars
 SHORT_TOPIC_RE = re.compile(r"^[^\n.?!]{1,60}$")
@@ -131,7 +133,7 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
 async def main() -> None:
     if not VAULT_ROOT.exists():
         raise RuntimeError(f"VAULT_ROOT does not exist: {VAULT_ROOT}")
-    log.info("bridge up; signal=%s vault=%s poll=%ss", SIGNAL_NUMBER, VAULT_ROOT, POLL_INTERVAL)
+    log.info("bridge up; signal=%s workspace=%s inbox=%s poll=%ss", SIGNAL_NUMBER, VAULT_ROOT, SIGNAL_INBOX, POLL_INTERVAL)
     async with httpx.AsyncClient() as client:
         while True:
             try:

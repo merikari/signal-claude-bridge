@@ -151,4 +151,4 @@ One-paragraph orientation: geography, character, best season, typical visitor.
 
 ## Customising
 
-This file lives in your vault (pointed to by `VAULT_ROOT`), not in the bridge repo. Edit it freely — changes take effect immediately with no daemon restart. To add a new domain, add a new `###` subsection and update `prompts/research.md` in the repo to include the new domain name in the classification table.
+This file lives in your workspace folder (pointed to by `VAULT_ROOT`), not in the bridge repo. Edit it freely — changes take effect immediately with no daemon restart. To add a new domain, add a new `###` subsection and update `prompts/research.md` in the repo to include the new domain name in the classification table.
