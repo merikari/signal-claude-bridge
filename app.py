@@ -103,15 +103,28 @@ def _resolve_claude_bin(value: str) -> str:
 
 CLAUDE_BIN = _resolve_claude_bin(_CLAUDE_BIN_RAW)
 
-# Tool allowlist for the spawned claude session. The bridge runs with
-# --permission-mode bypassPermissions (necessary because it is non-interactive
-# and any prompt would hang), so the allowlist is the primary boundary against
-# prompt-injected webpages telling Claude to read ~/.ssh/id_rsa, push to a
-# remote, etc. Bash, Task/Agent, NotebookEdit, MCP tools, and TodoWrite are
-# deliberately excluded. Override via CLAUDE_ALLOWED_TOOLS in .env if a
-# specific message needs more.
-CLAUDE_ALLOWED_TOOLS = os.environ.get(
-    "CLAUDE_ALLOWED_TOOLS",
+# Built-in tool set for the spawned claude session.
+#
+# Use --tools (not --allowed-tools): --allowed-tools only auto-grants
+# permissions and is silently overridden by user-level allow rules
+# (e.g. ~/.claude/settings.json with "Bash(*)"). --tools controls which
+# built-in tools exist in the session at all, so they cannot be invoked
+# regardless of permission settings.
+#
+# Bash, Task/Agent, NotebookEdit, and TodoWrite are deliberately
+# excluded. The bridge runs with --permission-mode bypassPermissions
+# because it is non-interactive (any prompt would hang); --tools is the
+# real boundary against prompt-injected webpages telling Claude to
+# read ~/.ssh/id_rsa, exfiltrate via shell, etc.
+#
+# Note: --tools restricts only built-in tools; MCP-server tools
+# (mcp__*) still load if user/project settings configure them. Path
+# scoping for Read/Write and dropping WebFetch are separate, larger
+# fixes to consider next.
+#
+# Override via CLAUDE_TOOLS in .env if a specific use case needs more.
+CLAUDE_TOOLS = os.environ.get(
+    "CLAUDE_TOOLS",
     "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
 )
 
@@ -149,8 +162,8 @@ async def run_claude(system_prompt: str, user_message: str) -> str:
         system_prompt,
         "--permission-mode",
         "bypassPermissions",
-        "--allowed-tools",
-        CLAUDE_ALLOWED_TOOLS,
+        "--tools",
+        CLAUDE_TOOLS,
     ]
     if CLAUDE_MODEL:
         args += ["--model", CLAUDE_MODEL]
@@ -230,8 +243,8 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
 async def main() -> None:
     if not VAULT_ROOT.exists():
         raise RuntimeError(f"VAULT_ROOT does not exist: {VAULT_ROOT}")
-    log.info("bridge up; api=%s workspace=%s inbox=%s poll=%ss claude=%s allowed_tools=%s",
-             SIGNAL_API_URL, VAULT_ROOT, SIGNAL_INBOX, POLL_INTERVAL, CLAUDE_BIN, CLAUDE_ALLOWED_TOOLS)
+    log.info("bridge up; api=%s workspace=%s inbox=%s poll=%ss claude=%s tools=%s",
+             SIGNAL_API_URL, VAULT_ROOT, SIGNAL_INBOX, POLL_INTERVAL, CLAUDE_BIN, CLAUDE_TOOLS)
 
     last_error_emit = 0.0
     last_error_msg = ""
