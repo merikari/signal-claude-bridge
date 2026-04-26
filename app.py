@@ -103,6 +103,18 @@ def _resolve_claude_bin(value: str) -> str:
 
 CLAUDE_BIN = _resolve_claude_bin(_CLAUDE_BIN_RAW)
 
+# Tool allowlist for the spawned claude session. The bridge runs with
+# --permission-mode bypassPermissions (necessary because it is non-interactive
+# and any prompt would hang), so the allowlist is the primary boundary against
+# prompt-injected webpages telling Claude to read ~/.ssh/id_rsa, push to a
+# remote, etc. Bash, Task/Agent, NotebookEdit, MCP tools, and TodoWrite are
+# deliberately excluded. Override via CLAUDE_ALLOWED_TOOLS in .env if a
+# specific message needs more.
+CLAUDE_ALLOWED_TOOLS = os.environ.get(
+    "CLAUDE_ALLOWED_TOOLS",
+    "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
+)
+
 SIGNAL_API_URL = os.environ.get("SIGNAL_API_URL", "http://127.0.0.1:8080").rstrip("/")
 SIGNAL_NUMBER = os.environ["SIGNAL_NUMBER"]  # own E.164 number, e.g. +358...
 ALLOWED_SENDERS = {s.strip() for s in os.environ.get("ALLOWED_SENDERS", SIGNAL_NUMBER).split(",") if s.strip()}
@@ -137,6 +149,8 @@ async def run_claude(system_prompt: str, user_message: str) -> str:
         system_prompt,
         "--permission-mode",
         "bypassPermissions",
+        "--allowed-tools",
+        CLAUDE_ALLOWED_TOOLS,
     ]
     if CLAUDE_MODEL:
         args += ["--model", CLAUDE_MODEL]
@@ -216,8 +230,8 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
 async def main() -> None:
     if not VAULT_ROOT.exists():
         raise RuntimeError(f"VAULT_ROOT does not exist: {VAULT_ROOT}")
-    log.info("bridge up; api=%s workspace=%s inbox=%s poll=%ss claude=%s",
-             SIGNAL_API_URL, VAULT_ROOT, SIGNAL_INBOX, POLL_INTERVAL, CLAUDE_BIN)
+    log.info("bridge up; api=%s workspace=%s inbox=%s poll=%ss claude=%s allowed_tools=%s",
+             SIGNAL_API_URL, VAULT_ROOT, SIGNAL_INBOX, POLL_INTERVAL, CLAUDE_BIN, CLAUDE_ALLOWED_TOOLS)
 
     last_error_emit = 0.0
     last_error_msg = ""
