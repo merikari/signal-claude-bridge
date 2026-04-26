@@ -9,20 +9,99 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import logging.handlers
 import os
 import re
+import shutil
+import sys
 from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 
+# --- Logging: rotating file + stderr (so any stream redirect still catches crashes) ---
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_PATH = LOG_DIR / "bridge.log"
+
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+# Avoid double-logging if the module is reloaded
+if not any(isinstance(h, logging.handlers.RotatingFileHandler) for h in _root.handlers):
+    _file_handler = logging.handlers.RotatingFileHandler(
+        LOG_PATH, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    _root.addHandler(_file_handler)
+if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.handlers.RotatingFileHandler)
+           for h in _root.handlers):
+    # stderr is captured to logs/bridge-stderr.log by run-hidden.ps1 — keep it
+    # at WARNING+ so it only collects real problems and unhandled tracebacks,
+    # not every httpx INFO line (those go to the rotating bridge.log instead).
+    _stream_handler = logging.StreamHandler()
+    _stream_handler.setLevel(logging.WARNING)
+    _stream_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    _root.addHandler(_stream_handler)
+
 log = logging.getLogger("signal-bridge")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 VAULT_ROOT = Path(os.environ["VAULT_ROOT"])
-CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
+_CLAUDE_BIN_RAW = os.environ.get("CLAUDE_BIN", "claude")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "")  # e.g. claude-sonnet-4-6; empty = CLI default
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", "300"))
+
+
+def _resolve_claude_bin(value: str) -> str:
+    """Resolve CLAUDE_BIN to an absolute path that exists.
+
+    Order:
+      1. If `value` is an absolute path that exists → use it.
+      2. shutil.which(value) — covers PATH-resolvable names.
+      3. Probe standard Claude Code install dirs and pick the highest version.
+         This survives auto-updates that change the version subdir.
+    Raises RuntimeError if nothing is found, so the bridge fails fast at startup
+    rather than silently dropping every incoming message.
+    """
+    p = Path(value)
+    if p.is_absolute() and p.exists():
+        return str(p)
+
+    found = shutil.which(value)
+    if found:
+        return found
+
+    # Standard Claude Code install root on Windows: %APPDATA%\Claude\claude-code\<version>\claude.exe
+    candidate_roots = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidate_roots.append(Path(appdata) / "Claude" / "claude-code")
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        candidate_roots.append(Path(localappdata) / "Programs" / "claude-code")
+
+    def _version_key(name: str) -> tuple:
+        parts = re.findall(r"\d+", name)
+        return tuple(int(x) for x in parts) if parts else (0,)
+
+    for root in candidate_roots:
+        if not root.is_dir():
+            continue
+        versions = sorted([d for d in root.iterdir() if d.is_dir()],
+                          key=lambda d: _version_key(d.name), reverse=True)
+        for vdir in versions:
+            exe = vdir / "claude.exe"
+            if exe.exists():
+                return str(exe)
+
+    raise RuntimeError(
+        f"Cannot resolve CLAUDE_BIN={value!r}. Not absolute-path-existing, not on PATH, "
+        f"and no claude.exe found under standard install roots. "
+        f"Set CLAUDE_BIN in .env to an absolute path."
+    )
+
+
+CLAUDE_BIN = _resolve_claude_bin(_CLAUDE_BIN_RAW)
 
 SIGNAL_API_URL = os.environ.get("SIGNAL_API_URL", "http://127.0.0.1:8080").rstrip("/")
 SIGNAL_NUMBER = os.environ["SIGNAL_NUMBER"]  # own E.164 number, e.g. +358...
@@ -38,6 +117,10 @@ FREEFORM_PROMPT = (PROMPTS_DIR / "freeform.md").read_text(encoding="utf-8").repl
 
 # Short-topic heuristic: ≤ 4 tokens, no sentence punctuation, ≤ 60 chars
 SHORT_TOPIC_RE = re.compile(r"^[^\n.?!]{1,60}$")
+
+# Re-emit a noisy receive-loop error at WARNING at most once per this many seconds.
+# Intermediate occurrences drop to DEBUG so the log doesn't fill up.
+RECEIVE_ERROR_REEMIT_SECONDS = 300.0
 
 
 def is_short_topic(msg: str) -> bool:
@@ -133,11 +216,22 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
 async def main() -> None:
     if not VAULT_ROOT.exists():
         raise RuntimeError(f"VAULT_ROOT does not exist: {VAULT_ROOT}")
-    log.info("bridge up; signal=%s workspace=%s inbox=%s poll=%ss", SIGNAL_NUMBER, VAULT_ROOT, SIGNAL_INBOX, POLL_INTERVAL)
+    log.info("bridge up; api=%s workspace=%s inbox=%s poll=%ss claude=%s",
+             SIGNAL_API_URL, VAULT_ROOT, SIGNAL_INBOX, POLL_INTERVAL, CLAUDE_BIN)
+
+    last_error_emit = 0.0
+    last_error_msg = ""
+    suppressed_count = 0
+
     async with httpx.AsyncClient() as client:
         while True:
             try:
                 envelopes = await signal_receive(client)
+                if last_error_msg:
+                    # Recovered — log once with the suppressed count
+                    log.info("receive loop recovered (suppressed %d repeats)", suppressed_count)
+                    last_error_msg = ""
+                    suppressed_count = 0
                 for env in envelopes:
                     parsed = extract_message(env)
                     if not parsed:
@@ -145,7 +239,17 @@ async def main() -> None:
                     sender, text = parsed
                     asyncio.create_task(handle_message(client, sender, text))
             except Exception as e:
-                log.warning("receive loop error: %s", e)
+                msg = str(e)
+                now = asyncio.get_event_loop().time()
+                if msg != last_error_msg or (now - last_error_emit) > RECEIVE_ERROR_REEMIT_SECONDS:
+                    extra = f" (suppressed {suppressed_count} repeats)" if suppressed_count else ""
+                    log.warning("receive loop error: %s%s", msg, extra)
+                    last_error_emit = now
+                    last_error_msg = msg
+                    suppressed_count = 0
+                else:
+                    suppressed_count += 1
+                    log.debug("receive loop error (suppressed): %s", msg)
             await asyncio.sleep(POLL_INTERVAL)
 
 
