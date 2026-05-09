@@ -139,13 +139,21 @@ SIGNAL_INBOX = os.environ.get("SIGNAL_INBOX", "Signal inbox")
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 RESEARCH_PROMPT = (PROMPTS_DIR / "research.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
 FREEFORM_PROMPT = (PROMPTS_DIR / "freeform.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
+URL_PROMPT = (PROMPTS_DIR / "url.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
 
 # Short-topic heuristic: ≤ 4 tokens, no sentence punctuation, ≤ 60 chars
 SHORT_TOPIC_RE = re.compile(r"^[^\n.?!]{1,60}$")
 
+# Bare-URL heuristic: message is a single http(s) link with no surrounding text.
+URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
+
 # Re-emit a noisy receive-loop error at WARNING at most once per this many seconds.
 # Intermediate occurrences drop to DEBUG so the log doesn't fill up.
 RECEIVE_ERROR_REEMIT_SECONDS = 300.0
+
+
+def is_url(msg: str) -> bool:
+    return bool(URL_RE.match(msg.strip()))
 
 
 def is_short_topic(msg: str) -> bool:
@@ -190,6 +198,12 @@ async def run_claude(system_prompt: str, user_message: str) -> str:
     lines = [ln for ln in stdout.splitlines() if ln.strip()]
     if not lines:
         return "FAIL: claude produced no output"
+    # Prefer the last line starting with OK: or FAIL: — Claude sometimes outputs
+    # extra text (URLs, preamble) after the sentinel.  Falling back to lines[-1]
+    # preserves original behaviour when no sentinel is present.
+    for line in reversed(lines):
+        if line.startswith(("OK:", "FAIL:")):
+            return line[:500]
     return lines[-1][:500]
 
 
@@ -232,8 +246,13 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
     if sender not in ALLOWED_SENDERS:
         log.warning("drop: sender %s not in allowlist", sender)
         return
-    mode = "research" if is_short_topic(text) else "freeform"
-    prompt = RESEARCH_PROMPT if mode == "research" else FREEFORM_PROMPT
+    if is_url(text):
+        mode = "url"
+    elif is_short_topic(text):
+        mode = "research"
+    else:
+        mode = "freeform"
+    prompt = {"research": RESEARCH_PROMPT, "freeform": FREEFORM_PROMPT, "url": URL_PROMPT}[mode]
     log.info("dispatch: mode=%s text=%r", mode, text[:80])
     result = await run_claude(prompt, text)
     await signal_send(client, sender, result)
