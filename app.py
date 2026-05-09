@@ -8,6 +8,7 @@ confirmation back via Signal.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import logging.handlers
 import os
@@ -135,6 +136,7 @@ POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "3"))
 SHORT_TOPIC_MAX_TOKENS = int(os.environ.get("SHORT_TOPIC_MAX_TOKENS", "4"))
 
 SIGNAL_INBOX = os.environ.get("SIGNAL_INBOX", "Signal inbox")
+ATTACH_MD = os.environ.get("ATTACH_MD", "true").lower() in ("true", "1", "yes")
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 RESEARCH_PROMPT = (PROMPTS_DIR / "research.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
@@ -159,6 +161,21 @@ def is_url(msg: str) -> bool:
 def is_short_topic(msg: str) -> bool:
     m = msg.strip()
     return bool(SHORT_TOPIC_RE.match(m)) and len(m.split()) <= SHORT_TOPIC_MAX_TOKENS
+
+
+def _inbox_snapshot() -> set[Path]:
+    inbox = VAULT_ROOT / SIGNAL_INBOX
+    return set(inbox.glob("*.md")) if inbox.is_dir() else set()
+
+
+def _encode_attachment(path: Path) -> str | None:
+    try:
+        raw = path.read_bytes()
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:text/plain;filename={path.name};base64,{b64}"
+    except Exception as e:
+        log.warning("attach encode failed for %s: %s", path.name, e)
+        return None
 
 
 async def run_claude(system_prompt: str, user_message: str) -> str:
@@ -217,9 +234,16 @@ async def signal_receive(client: httpx.AsyncClient) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-async def signal_send(client: httpx.AsyncClient, recipient: str, text: str) -> None:
-    url = f"{SIGNAL_API_URL}/v2/send"  # send body uses JSON, no URL encoding needed
+async def signal_send(
+    client: httpx.AsyncClient,
+    recipient: str,
+    text: str,
+    attachment: str | None = None,
+) -> None:
+    url = f"{SIGNAL_API_URL}/v2/send"
     payload = {"message": text, "number": SIGNAL_NUMBER, "recipients": [recipient]}
+    if attachment:
+        payload["base64_attachments"] = [attachment]
     try:
         r = await client.post(url, json=payload, timeout=15.0)
         r.raise_for_status()
@@ -254,8 +278,21 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
         mode = "freeform"
     prompt = {"research": RESEARCH_PROMPT, "freeform": FREEFORM_PROMPT, "url": URL_PROMPT}[mode]
     log.info("dispatch: mode=%s text=%r", mode, text[:80])
+
+    before = _inbox_snapshot() if ATTACH_MD else set()
+
     result = await run_claude(prompt, text)
-    await signal_send(client, sender, result)
+
+    attachment = None
+    if ATTACH_MD and result.startswith("OK:"):
+        new_files = sorted(_inbox_snapshot() - before,
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+        if new_files:
+            attachment = _encode_attachment(new_files[0])
+            if attachment:
+                log.info("attaching: %s", new_files[0].name)
+
+    await signal_send(client, sender, result, attachment)
     log.info("replied: %s", result[:120])
 
 

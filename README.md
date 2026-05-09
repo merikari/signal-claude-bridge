@@ -15,7 +15,7 @@ You send a Signal message to yourself (Note to Self). The bridge picks it up and
 | Short topic (≤ 4 words, no sentence punctuation) | `stoicism` | Claude researches the topic online and writes a short markdown note to your output folder |
 | Longer instruction | `summarise the key points of the EU AI Act and save it to my notes` | Claude follows the instruction directly |
 
-You get a one-line Signal reply confirming what was written (or an error if something went wrong).
+You get a one-line Signal reply confirming what was written, plus the full note as a downloadable attachment. On failure you get an error message instead (no attachment).
 
 Notes are tagged `ai-generated` and `signal-bridge` in frontmatter so you can review and promote them later.
 
@@ -49,7 +49,7 @@ Phone (Signal)
                               writes Signal inbox/YYYY-MM-DD <slug>.md
                                         │
                                         ▼
-                         POST /v2/send  (one-line ack to you)
+                         POST /v2/send  (ack + note attachment)
 ```
 
 Everything runs locally. No data leaves your machine except through Signal's own E2EE channel and Claude's API.
@@ -170,6 +170,7 @@ All settings live in `.env` (copy from `.env.example`):
 | `POLL_INTERVAL` | `3` | Seconds between `/v1/receive` polls |
 | `SHORT_TOPIC_MAX_TOKENS` | `4` | Token threshold for research vs freeform mode |
 | `SIGNAL_INBOX` | `Signal inbox` | Subfolder (relative to `VAULT_ROOT`) where research notes are written — must contain a `CLAUDE.md` with domain templates |
+| `ATTACH_MD` | `true` | Attach generated .md files to the Signal reply as downloadable files |
 
 ---
 
