@@ -4,5 +4,8 @@ __pycache__/
 .env
 logs/
 
+# User-specific skill configuration (copy from skills.example.json)
+skills.json
+
 # Pairing QR — contains a linking URI for your Signal account
 qr.png

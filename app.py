@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import logging.handlers
 import os
@@ -129,7 +130,7 @@ CLAUDE_TOOLS = os.environ.get(
     "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
 )
 
-SIGNAL_API_URL = os.environ.get("SIGNAL_API_URL", "http://127.0.0.1:8080").rstrip("/")
+SIGNAL_API_URL = os.environ.get("SIGNAL_API_URL", "http://127.0.0.1:8090").rstrip("/")
 SIGNAL_NUMBER = os.environ["SIGNAL_NUMBER"]  # own E.164 number, e.g. +358...
 ALLOWED_SENDERS = {s.strip() for s in os.environ.get("ALLOWED_SENDERS", SIGNAL_NUMBER).split(",") if s.strip()}
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "3"))
@@ -137,6 +138,7 @@ SHORT_TOPIC_MAX_TOKENS = int(os.environ.get("SHORT_TOPIC_MAX_TOKENS", "4"))
 
 SIGNAL_INBOX = os.environ.get("SIGNAL_INBOX", "Signal inbox")
 ATTACH_MD = os.environ.get("ATTACH_MD", "true").lower() in ("true", "1", "yes")
+HISTORY_DEPTH = int(os.environ.get("HISTORY_DEPTH", "5"))
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 RESEARCH_PROMPT = (PROMPTS_DIR / "research.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
@@ -152,6 +154,153 @@ URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 # Re-emit a noisy receive-loop error at WARNING at most once per this many seconds.
 # Intermediate occurrences drop to DEBUG so the log doesn't fill up.
 RECEIVE_ERROR_REEMIT_SECONDS = 300.0
+
+
+# --- Skill injection (optional, config-driven) ---
+
+def _load_skills() -> list[dict]:
+    """Load skill definitions from skills.json (relative to the bridge repo dir).
+
+    Returns a list of validated skill dicts with resolved absolute paths,
+    or an empty list if the file is missing or invalid.
+    """
+    skills_path = Path(__file__).parent / "skills.json"
+    if not skills_path.exists():
+        log.info("skills: no skills.json found — skill injection disabled")
+        return []
+    try:
+        raw = json.loads(skills_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning("skills: failed to parse skills.json: %s", e)
+        return []
+
+    loaded = []
+    for entry in raw.get("skills", []):
+        name = entry.get("name", "<unnamed>")
+        keywords = [kw.lower() for kw in entry.get("keywords", [])]
+        skill_path = VAULT_ROOT / entry.get("skill_path", "")
+        extra_tools = entry.get("extra_tools", [])
+        if not keywords:
+            log.warning("skills: skipping %r — no keywords", name)
+            continue
+        if not skill_path.exists():
+            log.warning("skills: skipping %r — %s not found", name, skill_path)
+            continue
+        loaded.append({
+            "name": name,
+            "keywords": keywords,
+            "skill_path": skill_path,
+            "extra_tools": extra_tools,
+        })
+    log.info("skills: loaded %d skill(s): %s", len(loaded), ", ".join(s["name"] for s in loaded))
+    return loaded
+
+
+SKILLS = _load_skills()
+
+
+def match_skills(msg: str) -> list[dict]:
+    """Return all skills whose keywords appear in the message (case-insensitive)."""
+    lower = msg.lower()
+    return [s for s in SKILLS if any(kw in lower for kw in s["keywords"])]
+
+
+# --- Context injection (message history + referential detection) ---
+
+_HISTORY_MAX_ENTRIES = 100
+
+REFERENTIAL_WORDS = {
+    "that", "previous", "last", "more detail", "expand", "elaborate",
+    "lisää", "edellinen", "viime", "tarkenna", "laajenna", "sama",
+}
+
+_HISTORY_PATH: Path | None = None
+
+
+def _get_history_path() -> Path:
+    global _HISTORY_PATH
+    if _HISTORY_PATH is None:
+        _HISTORY_PATH = VAULT_ROOT / SIGNAL_INBOX / ".bridge-history.jsonl"
+    return _HISTORY_PATH
+
+
+def append_history(msg: str, mode: str, result: str) -> None:
+    """Append a history entry and trim to _HISTORY_MAX_ENTRIES."""
+    from datetime import datetime, timezone
+    path = _get_history_path()
+    entry = json.dumps({
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        "msg": msg[:200],
+        "mode": mode,
+        "result": result[:300],
+    }, ensure_ascii=False)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(entry + "\n")
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) > _HISTORY_MAX_ENTRIES:
+            path.write_text("\n".join(lines[-_HISTORY_MAX_ENTRIES:]) + "\n", encoding="utf-8")
+    except Exception as e:
+        log.debug("history write failed: %s", e)
+
+
+def _is_referential(msg: str) -> bool:
+    lower = msg.lower()
+    return any(w in lower for w in REFERENTIAL_WORDS)
+
+
+def load_history_context(msg: str) -> str:
+    """Build a context string from recent history for the system prompt."""
+    path = _get_history_path()
+    if not path.exists():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+    except Exception:
+        return ""
+    if not lines:
+        return ""
+
+    recent = lines[-HISTORY_DEPTH:]
+    entries = []
+    last_result_file: str | None = None
+    for line in recent:
+        try:
+            e = json.loads(line)
+            entries.append(f"- [{e['ts']}] ({e['mode']}) \"{e['msg']}\" → {e['result']}")
+            result_str = e.get("result", "")
+            if result_str.startswith("OK:"):
+                parts = result_str.split("—")
+                fname = parts[0].replace("OK:", "").strip()
+                if fname:
+                    last_result_file = fname
+        except Exception:
+            continue
+    if not entries:
+        return ""
+
+    ctx = "## Recent messages from this sender\n\n" + "\n".join(entries)
+
+    if _is_referential(msg) and last_result_file:
+        note_path = VAULT_ROOT / SIGNAL_INBOX / last_result_file
+        if note_path.exists():
+            try:
+                content = note_path.read_text(encoding="utf-8")[:500]
+                ctx += f"\n\n## Content of most recent note ({last_result_file})\n\n{content}"
+            except Exception:
+                pass
+
+    memory_path = VAULT_ROOT / SIGNAL_INBOX / ".bridge-memory.md"
+    if memory_path.exists():
+        try:
+            mem = memory_path.read_text(encoding="utf-8").strip()
+            if mem:
+                ctx += f"\n\n## Persistent memory\n\n{mem}"
+        except Exception:
+            pass
+
+    return ctx
 
 
 def is_url(msg: str) -> bool:
@@ -178,7 +327,14 @@ def _encode_attachment(path: Path) -> str | None:
         return None
 
 
-async def run_claude(system_prompt: str, user_message: str) -> str:
+async def run_claude(
+    system_prompt: str,
+    user_message: str,
+    extra_tools: list[str] | None = None,
+) -> str:
+    tools = CLAUDE_TOOLS
+    if extra_tools:
+        tools = ",".join(dict.fromkeys((tools + "," + ",".join(extra_tools)).split(",")))
     args = [
         CLAUDE_BIN,
         "-p",
@@ -188,7 +344,7 @@ async def run_claude(system_prompt: str, user_message: str) -> str:
         "--permission-mode",
         "bypassPermissions",
         "--tools",
-        CLAUDE_TOOLS,
+        tools,
     ]
     if CLAUDE_MODEL:
         args += ["--model", CLAUDE_MODEL]
@@ -277,11 +433,28 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
     else:
         mode = "freeform"
     prompt = {"research": RESEARCH_PROMPT, "freeform": FREEFORM_PROMPT, "url": URL_PROMPT}[mode]
-    log.info("dispatch: mode=%s text=%r", mode, text[:80])
+
+    matched = match_skills(text)
+    extra_tools: list[str] = []
+    if matched:
+        skill_names = [s["name"] for s in matched]
+        log.info("dispatch: mode=%s skills=%s text=%r", mode, skill_names, text[:80])
+        for s in matched:
+            skill_content = s["skill_path"].read_text(encoding="utf-8")
+            prompt += f"\n\n---\n\n# Skill: {s['name']}\n\n{skill_content}"
+            extra_tools.extend(s["extra_tools"])
+    else:
+        log.info("dispatch: mode=%s text=%r", mode, text[:80])
+
+    history_ctx = load_history_context(text)
+    if history_ctx:
+        prompt = history_ctx + "\n\n---\n\n" + prompt
 
     before = _inbox_snapshot() if ATTACH_MD else set()
 
-    result = await run_claude(prompt, text)
+    result = await run_claude(prompt, text, extra_tools=extra_tools or None)
+
+    append_history(text, mode, result)
 
     attachment = None
     if ATTACH_MD and result.startswith("OK:"):

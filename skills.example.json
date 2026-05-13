@@ -1,0 +1,16 @@
+{
+  "skills": [
+    {
+      "name": "home-assistant-mcp",
+      "keywords": ["lights", "thermostat", "ha", "automation", "temperature", "sensor"],
+      "skill_path": ".claude/skills/home-assistant-mcp/SKILL.md",
+      "extra_tools": []
+    },
+    {
+      "name": "arr-mcp",
+      "keywords": ["sonarr", "radarr", "lidarr", "movie", "series", "download"],
+      "skill_path": ".claude/skills/arr-mcp/SKILL.md",
+      "extra_tools": []
+    }
+  ]
+}

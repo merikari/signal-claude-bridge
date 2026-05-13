@@ -8,10 +8,11 @@ Built on top of [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-re
 
 ## What it does
 
-You send a Signal message to yourself (Note to Self). The bridge picks it up and routes it one of two ways:
+You send a Signal message to yourself (Note to Self). The bridge picks it up and routes it one of three ways:
 
 | Message type | Example | What happens |
 |---|---|---|
+| Bare URL | `https://example.com/article` | Claude fetches the page, classifies the domain from content, and writes a structured note |
 | Short topic (≤ 4 words, no sentence punctuation) | `stoicism` | Claude researches the topic online and writes a short markdown note to your output folder |
 | Longer instruction | `summarise the key points of the EU AI Act and save it to my notes` | Claude follows the instruction directly |
 
@@ -31,8 +32,12 @@ Phone (Signal)
             ▼
       polling daemon  (pythonw.exe, background)
             │
+            ├── bare URL     ──► prompts/url.md
             ├── short topic  ──► prompts/research.md
             └── freeform     ──► prompts/freeform.md
+                                        │
+                              (+ skills.json keyword match → SKILL.md injection)
+                              (+ .bridge-history.jsonl → recent context)
                                         │
                                         ▼
                               claude -p <message>
@@ -163,14 +168,16 @@ All settings live in `.env` (copy from `.env.example`):
 | `CLAUDE_BIN` | `claude` | Path to Claude Code CLI executable |
 | `CLAUDE_MODEL` | *(CLI default)* | Model for `claude -p`, e.g. `claude-sonnet-4-6` |
 | `CLAUDE_TIMEOUT` | `300` | Max seconds to wait for Claude subprocess |
-| `SIGNAL_API_PORT` | `8090` | Host port for the signal-cli-rest-api container — change if it conflicts with another service |
-| `SIGNAL_API_URL` | `http://127.0.0.1:8090` | signal-cli-rest-api base URL — must use the same port as `SIGNAL_API_PORT` |
+| `CLAUDE_TOOLS` | `Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` | Comma-separated built-in tools available to Claude (Bash excluded by default for security) |
+| `SIGNAL_API_PORT` | `8090` | Host port for docker-compose only — sets the container's published port. Not read by the Python daemon; update `SIGNAL_API_URL` to match if you change this |
+| `SIGNAL_API_URL` | `http://127.0.0.1:8090` | signal-cli-rest-api base URL used by the daemon |
 | `SIGNAL_NUMBER` | *(required)* | Your E.164 Signal number |
 | `ALLOWED_SENDERS` | `SIGNAL_NUMBER` | Comma-separated allowlist of sender numbers |
 | `POLL_INTERVAL` | `3` | Seconds between `/v1/receive` polls |
 | `SHORT_TOPIC_MAX_TOKENS` | `4` | Token threshold for research vs freeform mode |
 | `SIGNAL_INBOX` | `Signal inbox` | Subfolder (relative to `VAULT_ROOT`) where research notes are written — must contain a `CLAUDE.md` with domain templates |
 | `ATTACH_MD` | `true` | Attach generated .md files to the Signal reply as downloadable files |
+| `HISTORY_DEPTH` | `5` | Number of recent messages to include as context for follow-up queries |
 
 ---
 
@@ -205,8 +212,73 @@ Edit the prompt files — no code changes needed:
 
 - `prompts/research.md` — classifies the message domain, then delegates formatting to `Signal inbox/CLAUDE.md`
 - `prompts/freeform.md` — governs longer instructions (output location, tagging, safety guardrails)
+- `prompts/url.md` — fetches a bare URL, classifies domain from page content, writes a structured note
 
-Both prompts instruct Claude to return a single `OK: ...` or `FAIL: ...` line on stdout, which is forwarded back to you as the Signal reply.
+All prompts instruct Claude to return a single `OK: ...` or `FAIL: ...` line on stdout, which is forwarded back to you as the Signal reply.
+
+---
+
+## Skills
+
+Skills are workspace-level `SKILL.md` files that give Claude domain-specific context and capabilities. When a message contains configured keywords, the bridge loads the matching skill's instructions into the system prompt alongside the normal research/freeform/url prompt.
+
+### Setup
+
+1. Discover available skills in your workspace:
+
+```powershell
+Get-ChildItem "$env:VAULT_ROOT\.claude\skills" -Directory | Select-Object Name
+```
+
+2. Copy the example config and edit it:
+
+```powershell
+copy skills.example.json skills.json
+```
+
+3. Edit `skills.json` — add entries for each skill you want to activate:
+
+```json
+{
+  "skills": [
+    {
+      "name": "home-assistant-mcp",
+      "keywords": ["lights", "thermostat", "ha", "automation", "temperature"],
+      "skill_path": ".claude/skills/home-assistant-mcp/SKILL.md",
+      "extra_tools": []
+    }
+  ]
+}
+```
+
+| Field | Description |
+|---|---|
+| `name` | Display name (for logs) |
+| `keywords` | Case-insensitive words that trigger this skill — if any keyword appears in the message, the skill is injected |
+| `skill_path` | Path to the skill's `SKILL.md`, relative to `VAULT_ROOT` |
+| `extra_tools` | Additional built-in tools to enable for this skill (appended to `CLAUDE_TOOLS`). Leave empty to use defaults |
+
+If `skills.json` is missing, the bridge starts normally with skill injection disabled. Multiple skills can match a single message (they're additive).
+
+> **Security note:** Skills that enable write operations (e.g. Home Assistant control) expand the blast radius of any message. This is mitigated by the sender allowlist — only your own Signal number can trigger the bridge.
+
+---
+
+## Follow-up messages
+
+The bridge maintains a lightweight message history so follow-up queries like "tell me more about that" or "expand on the last note" work across invocations.
+
+### How it works
+
+After each successful invocation, the bridge appends a one-line summary to `{SIGNAL_INBOX}/.bridge-history.jsonl`. On the next message, the last N entries (controlled by `HISTORY_DEPTH`, default 5) are included in the system prompt as context.
+
+When a message contains referential words (e.g. "that", "previous", "last", "expand", or Finnish equivalents like "edellinen", "lisää"), the bridge also reads the first 500 characters of the most recent output note and includes them as additional context.
+
+### Persistent memory
+
+Claude can also maintain a `.bridge-memory.md` file in the inbox folder for durable preferences (e.g. "always write recipes in Finnish"). This file is loaded into every invocation's system prompt if it exists. Claude creates and appends to it when it detects a standing preference in your message.
+
+Both files are auto-managed — no manual maintenance required. To reset history, delete `.bridge-history.jsonl`. To reset preferences, delete `.bridge-memory.md`.
 
 ---
 
@@ -217,6 +289,7 @@ Both prompts instruct Claude to return a single `OK: ...` or `FAIL: ...` line on
 - **Sender allowlist** — `ALLOWED_SENDERS` defaults to your own number. Messages from anyone else are logged and dropped before Claude is invoked.
 - **No inbound ports** are opened on your router.
 - **Image is pinned** to a specific release tag in `docker-compose.yml`. Upgrades are deliberate.
+- **Tool restriction** — `CLAUDE_TOOLS` controls which built-in tools Claude has access to. Bash is excluded by default to prevent prompt injection from fetched web pages or skill content reaching a shell.
 
 ---
 
@@ -237,7 +310,7 @@ docker compose pull && docker compose up -d
 |---|---|---|
 | `400 Bad Request` on `/v1/receive` | Container in `json-rpc` mode | Ensure `MODE: normal` in `docker-compose.yml`, recreate container |
 | `FileNotFoundError` on startup | `CLAUDE_BIN` not set or path wrong | Set full path in `.env`; re-run `install-service.ps1` after Claude upgrades |
-| Task shows `Ready` not `Running` | pythonw crashed on startup | Check `logs\bridge.log` and `logs\bridge-err.log` |
+| Task shows `Ready` not `Running` | Normal — the VBScript launcher exits immediately after spawning pythonw | Verify the bridge is alive by checking `logs\bridge.log` for recent poll lines. If the log is stale, check `logs\bridge-err.log` |
 | Messages received but no note written | Claude failed silently | Signal reply will say `FAIL: ...`; check logs for details |
 | System drive filling up | Container log not rotated | Ensure `logging:` block is present in `docker-compose.yml`; recreate the container with `docker compose down && docker compose up -d` to apply it |
 

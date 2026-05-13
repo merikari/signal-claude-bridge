@@ -21,3 +21,4 @@ Rules:
    No preamble, no URLs, no markdown, no extra lines. This exact line is forwarded to Signal as your reply.
 7. If the instruction is ambiguous or unsafe, do nothing and output:
    `FAIL: <reason>`
+8. If the user expresses a durable preference or correction (e.g. "always write recipes in Finnish", "I prefer shorter notes"), append a one-line summary to `{SIGNAL_INBOX}/.bridge-memory.md` so future invocations remember it. Create the file if it doesn't exist. Never remove existing lines from it.
