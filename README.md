@@ -118,19 +118,17 @@ Open `.env` and fill in at minimum:
 | Variable | Description |
 |---|---|
 | `VAULT_ROOT` | Absolute path to your workspace (the working directory Claude runs in) |
-| `CLAUDE_BIN` | Full path to `claude.exe` — see note below |
+| `CLAUDE_BIN` | Path or name of `claude.exe` — defaults to `claude`, see note below |
 | `SIGNAL_NUMBER` | Your Signal number in E.164 format, e.g. `+1234567890` |
 | `ALLOWED_SENDERS` | Same as above (messages from anyone else are dropped) |
 
-**Finding `CLAUDE_BIN`:** Claude's exe is not on PATH by default on Windows.
+**`CLAUDE_BIN` resolution:** On Windows, Claude Code installs to a versioned directory and is not on PATH by default. The bridge resolves `CLAUDE_BIN` in this order, re-checking on every message so Claude Code auto-updates don't break a running bridge:
 
-```powershell
-Get-ChildItem "$env:APPDATA\Claude" -Recurse -Filter "claude.exe" | Select-Object FullName
-```
+1. If the value is an absolute path that exists, use it.
+2. `shutil.which(value)` — covers PATH-resolvable names.
+3. Probe `%APPDATA%\Claude\claude-code\<version>\claude.exe` and `%LOCALAPPDATA%\Programs\claude-code\<version>\claude.exe`, picking the highest version.
 
-Typical result: `C:\Users\<you>\AppData\Roaming\Claude\claude-code\<version>\claude.exe`
-
-> **Note:** After a Claude upgrade the version segment changes. Update `CLAUDE_BIN` in `.env` to match.
+Leave `CLAUDE_BIN=claude` (the default) to get auto-discovery. Override with an absolute path only if you need to pin a specific install.
 
 ### 4. Run manually (first test)
 
@@ -309,7 +307,8 @@ docker compose pull && docker compose up -d
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `400 Bad Request` on `/v1/receive` | Container in `json-rpc` mode | Ensure `MODE: normal` in `docker-compose.yml`, recreate container |
-| `FileNotFoundError` on startup | `CLAUDE_BIN` not set or path wrong | Set full path in `.env`; re-run `install-service.ps1` after Claude upgrades |
+| `FileNotFoundError` on startup | `CLAUDE_BIN` not resolvable | Leave `CLAUDE_BIN=claude` for auto-discovery, or set an absolute path in `.env` |
+| Bridge silently stops replying after a Claude Code update | (Pre-fix bug) startup-cached `CLAUDE_BIN` pointed at the old versioned dir | Fixed: bridge now re-resolves per message. Restart the service if running an older build |
 | Task shows `Ready` not `Running` | Normal — the VBScript launcher exits immediately after spawning pythonw | Verify the bridge is alive by checking `logs\bridge.log` for recent poll lines. If the log is stale, check `logs\bridge-err.log` |
 | Messages received but no note written | Claude failed silently | Signal reply will say `FAIL: ...`; check logs for details |
 | System drive filling up | Container log not rotated | Ensure `logging:` block is present in `docker-compose.yml`; recreate the container with `docker compose down && docker compose up -d` to apply it |

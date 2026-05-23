@@ -335,8 +335,12 @@ async def run_claude(
     tools = CLAUDE_TOOLS
     if extra_tools:
         tools = ",".join(dict.fromkeys((tools + "," + ",".join(extra_tools)).split(",")))
+    # Re-resolve per call so Claude Code auto-updates (which replace the versioned
+    # install dir under %APPDATA%\Claude\claude-code\) don't leave us with a stale
+    # path cached at startup.
+    claude_bin = _resolve_claude_bin(_CLAUDE_BIN_RAW)
     args = [
-        CLAUDE_BIN,
+        claude_bin,
         "-p",
         user_message,
         "--append-system-prompt",
