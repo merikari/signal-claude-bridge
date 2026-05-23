@@ -21,6 +21,8 @@ from urllib.parse import quote
 
 import httpx
 
+import arr_handler
+
 # --- Logging: rotating file + stderr (so any stream redirect still catches crashes) ---
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -430,6 +432,17 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
     if sender not in ALLOWED_SENDERS:
         log.warning("drop: sender %s not in allowlist", sender)
         return
+
+    # Direct intent dispatch — skip Claude for clearly-shaped actions.
+    radarr_title = arr_handler.parse_radarr_add(text)
+    if radarr_title:
+        log.info("dispatch: intent=radarr_add title=%r", radarr_title)
+        result = await arr_handler.add_movie(radarr_title)
+        append_history(text, "intent:radarr_add", result)
+        await signal_send(client, sender, result, None)
+        log.info("replied: %s", result[:120])
+        return
+
     if is_url(text):
         mode = "url"
     elif is_short_topic(text):

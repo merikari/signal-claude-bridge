@@ -15,6 +15,7 @@ You send a Signal message to yourself (Note to Self). The bridge picks it up and
 | Bare URL | `https://example.com/article` | Claude fetches the page, classifies the domain from content, and writes a structured note |
 | Short topic (≤ 4 words, no sentence punctuation) | `stoicism` | Claude researches the topic online and writes a short markdown note to your output folder |
 | Longer instruction | `summarise the key points of the EU AI Act and save it to my notes` | Claude follows the instruction directly |
+| Radarr add intent (optional) | `add Dune Part Two to Radarr` | Bridge hits Radarr's REST API directly, adds the top search match with default profile + root folder, and replies — Claude is not invoked |
 
 You get a one-line Signal reply confirming what was written, plus the full note as a downloadable attachment. On failure you get an error message instead (no attachment).
 
@@ -176,6 +177,8 @@ All settings live in `.env` (copy from `.env.example`):
 | `SIGNAL_INBOX` | `Signal inbox` | Subfolder (relative to `VAULT_ROOT`) where research notes are written — must contain a `CLAUDE.md` with domain templates |
 | `ATTACH_MD` | `true` | Attach generated .md files to the Signal reply as downloadable files |
 | `HISTORY_DEPTH` | `5` | Number of recent messages to include as context for follow-up queries |
+| `RADARR_URL` | `http://localhost:7878` | Radarr base URL — used by the direct REST handler |
+| `RADARR_API_KEY` | *(empty)* | Radarr API key (Settings → General, or `%ProgramData%\Radarr\config.xml`). Leave empty to disable the Radarr intent path |
 
 ---
 
