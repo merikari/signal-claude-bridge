@@ -21,7 +21,7 @@ from urllib.parse import quote
 
 import httpx
 
-import arr_handler
+import intent_dispatcher
 
 # --- Logging: rotating file + stderr (so any stream redirect still catches crashes) ---
 LOG_DIR = Path(__file__).parent / "logs"
@@ -433,12 +433,14 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
         log.warning("drop: sender %s not in allowlist", sender)
         return
 
-    # Direct intent dispatch — skip Claude for clearly-shaped actions.
-    radarr_title = arr_handler.parse_radarr_add(text)
-    if radarr_title:
-        log.info("dispatch: intent=radarr_add title=%r", radarr_title)
-        result = await arr_handler.add_movie(radarr_title)
-        append_history(text, "intent:radarr_add", result)
+    # Direct intent dispatch — config-driven HTTP pipelines that bypass Claude
+    # for clearly-shaped actions. See intents.json / intents.example.json.
+    matched = intent_dispatcher.match_intent(text)
+    if matched:
+        intent, groups = matched
+        log.info("dispatch: intent=%s groups=%s", intent["name"], list(groups.keys()))
+        result = await intent_dispatcher.run_intent(intent, groups)
+        append_history(text, f"intent:{intent['name']}", result)
         await signal_send(client, sender, result, None)
         log.info("replied: %s", result[:120])
         return
@@ -489,6 +491,9 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
 async def main() -> None:
     if not VAULT_ROOT.exists():
         raise RuntimeError(f"VAULT_ROOT does not exist: {VAULT_ROOT}")
+    # Eager-load intents now that logging is configured, so the "loaded N intents"
+    # line shows up at startup rather than on first matching message.
+    intent_dispatcher.preload()
     log.info("bridge up; api=%s workspace=%s inbox=%s poll=%ss claude=%s tools=%s",
              SIGNAL_API_URL, VAULT_ROOT, SIGNAL_INBOX, POLL_INTERVAL, CLAUDE_BIN, CLAUDE_TOOLS)
 

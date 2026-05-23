@@ -15,7 +15,7 @@ You send a Signal message to yourself (Note to Self). The bridge picks it up and
 | Bare URL | `https://example.com/article` | Claude fetches the page, classifies the domain from content, and writes a structured note |
 | Short topic (≤ 4 words, no sentence punctuation) | `stoicism` | Claude researches the topic online and writes a short markdown note to your output folder |
 | Longer instruction | `summarise the key points of the EU AI Act and save it to my notes` | Claude follows the instruction directly |
-| Radarr add intent (optional) | `add Dune Part Two to Radarr` | Bridge hits Radarr's REST API directly, adds the top search match with default profile + root folder, and replies — Claude is not invoked |
+| Intent match (optional) | depends on your `intents.json` — e.g. `add Dune Part Two to Radarr` | Bridge runs a config-driven HTTP pipeline and replies — Claude is not invoked. See [Intent dispatcher](#intent-dispatcher) |
 
 You get a one-line Signal reply confirming what was written, plus the full note as a downloadable attachment. On failure you get an error message instead (no attachment).
 
@@ -177,8 +177,8 @@ All settings live in `.env` (copy from `.env.example`):
 | `SIGNAL_INBOX` | `Signal inbox` | Subfolder (relative to `VAULT_ROOT`) where research notes are written — must contain a `CLAUDE.md` with domain templates |
 | `ATTACH_MD` | `true` | Attach generated .md files to the Signal reply as downloadable files |
 | `HISTORY_DEPTH` | `5` | Number of recent messages to include as context for follow-up queries |
-| `RADARR_URL` | `http://localhost:7878` | Radarr base URL — used by the direct REST handler |
-| `RADARR_API_KEY` | *(empty)* | Radarr API key (Settings → General, or `%ProgramData%\Radarr\config.xml`). Leave empty to disable the Radarr intent path |
+
+Intents (see [Intent dispatcher](#intent-dispatcher)) can reference additional `${VAR}` env vars defined in `.env`; those are user-specific and not listed here.
 
 ---
 
@@ -262,6 +262,37 @@ copy skills.example.json skills.json
 If `skills.json` is missing, the bridge starts normally with skill injection disabled. Multiple skills can match a single message (they're additive).
 
 > **Security note:** Skills that enable write operations (e.g. Home Assistant control) expand the blast radius of any message. This is mitigated by the sender allowlist — only your own Signal number can trigger the bridge.
+
+---
+
+## Intent dispatcher
+
+For clearly-shaped actions where invoking Claude would be overkill (e.g. "add this movie to Radarr", "trigger this webhook"), the bridge supports a config-driven intent dispatcher. Messages matching an intent's regex run a small HTTP pipeline and reply directly — Claude is not invoked.
+
+The dispatcher is generic: the bridge ships zero service-specific logic. All bindings live in `intents.json` (gitignored, user-specific), so a fresh clone has no opinions about which services you integrate with.
+
+### Setup
+
+1. Copy the example:
+
+```powershell
+copy intents.example.json intents.json
+```
+
+2. Edit `intents.json`. The shipped example wires up a Radarr "add movie" flow as a worked illustration — remove it if you don't use Radarr, or replicate the shape for other services.
+
+3. Add any `${ENV_VAR}` placeholders your intents reference (e.g. `RADARR_API_KEY`) to `.env`.
+
+If `intents.json` is missing or contains no intents, dispatch is disabled and all messages flow to Claude as before.
+
+### Schema
+
+Each intent has a `match` regex, an ordered list of `steps` (HTTP calls or control steps), and a `reply` template. Step responses are saved under `save_as`, optionally narrowed with `extract`, and later steps can reference them via `{name.path}`. `${ENV_VAR}` placeholders expand from `.env` at request time. See `intents.example.json` for full field documentation and a working example.
+
+### When to use intents vs skills
+
+- **Intent** when the action is well-shaped (one regex captures it), the work is a deterministic HTTP sequence, and you want fast/reliable execution without LLM-in-loop ambiguity.
+- **Skill** when the action benefits from Claude's reasoning — classification, summarisation, writing notes, anything requiring judgement.
 
 ---
 

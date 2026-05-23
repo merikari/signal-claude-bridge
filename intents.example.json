@@ -1,0 +1,75 @@
+{
+  "_comment": "Copy this file to intents.json (gitignored) and edit. The bridge matches each incoming message against every intent's regex in order; the first match runs its HTTP pipeline and returns a reply, skipping Claude entirely. Leave intents.json absent (or with an empty intents array) to disable.",
+
+  "_schema": {
+    "name": "human-readable id for logs",
+    "match": "Python regex applied to the trimmed message; use named groups (?P<value>...) to capture data. The first non-None named group is exposed as {value}.",
+    "match_flags": "Optional. Pipe-separated subset of IGNORECASE|MULTILINE|DOTALL|VERBOSE.",
+    "steps": "Ordered list. Each step is either an HTTP call (url + method + ...) or a control step (skip_if / reply).",
+    "step.url": "URL template. ${ENV_VAR} expands from .env / process env. {ctx.path} pulls from prior step output or named regex groups.",
+    "step.method": "GET (default) | POST | PUT | DELETE | PATCH",
+    "step.headers/params/json": "Templated the same way as url.",
+    "step.extract": "Dotted/bracketed path applied to the JSON response before saving (e.g. '[0]' takes the first array element).",
+    "step.save_as": "Name to bind the (post-extract) response under in the context, e.g. 'lookup'.",
+    "step.fail_if_empty": "If the extracted value is empty/None, return FAIL: with this template (rendered).",
+    "step.fail_message": "Template for non-2xx responses. Supports {name}, {status}, {body}, {url}.",
+    "step.skip_if": "Path that, if truthy, skips this step. With skip_reply, returns immediately instead of skipping.",
+    "step.skip_reply": "Reply template returned when skip_if matches — short-circuits the whole pipeline.",
+    "step.reply": "Pure-reply step (no url): renders this template and returns. Useful with skip_if for branching.",
+    "reply": "Template returned on successful completion of all steps."
+  },
+
+  "intents": [
+    {
+      "name": "radarr_add",
+      "_comment": "Matches 'add X to Radarr', 'Radarr: X', 'Radarr add X', and Finnish 'lisää X radariin'. Requires RADARR_URL and RADARR_API_KEY in .env. Picks the top lookup hit + first quality profile + first root folder and triggers an immediate search.",
+      "match": "^(?:add\\s+(?P<a>.+?)\\s+to\\s+radarr|radarr\\s+add\\s+(?P<b>.+)|radarr\\s*[:\\-]\\s*(?P<c>.+)|lis(?:ää|aa)\\s+(?P<d>.+?)\\s+radariin)\\s*$",
+      "match_flags": "IGNORECASE",
+      "steps": [
+        {
+          "method": "GET",
+          "url": "${RADARR_URL}/api/v3/movie/lookup",
+          "headers": {"X-Api-Key": "${RADARR_API_KEY}"},
+          "params": {"term": "{value}"},
+          "extract": "[0]",
+          "save_as": "lookup",
+          "fail_if_empty": "no Radarr match for {value}"
+        },
+        {
+          "skip_if": "lookup.id",
+          "skip_reply": "OK: {lookup.title} ({lookup.year}) already in Radarr (id {lookup.id})."
+        },
+        {
+          "method": "GET",
+          "url": "${RADARR_URL}/api/v3/qualityprofile",
+          "headers": {"X-Api-Key": "${RADARR_API_KEY}"},
+          "extract": "[0]",
+          "save_as": "qp"
+        },
+        {
+          "method": "GET",
+          "url": "${RADARR_URL}/api/v3/rootfolder",
+          "headers": {"X-Api-Key": "${RADARR_API_KEY}"},
+          "extract": "[0]",
+          "save_as": "rf"
+        },
+        {
+          "method": "POST",
+          "url": "${RADARR_URL}/api/v3/movie",
+          "headers": {"X-Api-Key": "${RADARR_API_KEY}"},
+          "json": {
+            "title": "{lookup.title}",
+            "qualityProfileId": "{qp.id}",
+            "rootFolderPath": "{rf.path}",
+            "tmdbId": "{lookup.tmdbId}",
+            "year": "{lookup.year}",
+            "monitored": true,
+            "minimumAvailability": "announced",
+            "addOptions": {"searchForMovie": true}
+          }
+        }
+      ],
+      "reply": "OK: Added {lookup.title} ({lookup.year}) to Radarr — profile: {qp.name}, root: {rf.path}. Search triggered."
+    }
+  ]
+}
