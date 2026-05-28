@@ -90,12 +90,16 @@ def _render(value: Any, ctx: dict) -> Any:
 
     A string that is exactly one placeholder returns the raw referenced value
     (preserves int/bool/etc). Mixed text returns a string.
+
+    The negative lookbehind `(?<!\\$)` ensures we do not match the `{VAR}`
+    portion of an env-substitution token `${VAR}` — those are handled by
+    _envsub later in the pipeline.
     """
     if isinstance(value, str):
-        whole = re.fullmatch(r"\{([^{}]+)\}", value)
+        whole = re.fullmatch(r"(?<!\$)\{([^{}]+)\}", value)
         if whole:
             return _resolve(whole.group(1), ctx)
-        return re.sub(r"\{([^{}]+)\}",
+        return re.sub(r"(?<!\$)\{([^{}]+)\}",
                       lambda m: str(_resolve(m.group(1), ctx) or ""),
                       value)
     if isinstance(value, dict):
