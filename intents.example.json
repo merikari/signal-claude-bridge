@@ -70,6 +70,27 @@
         }
       ],
       "reply": "OK: Added {lookup.title} ({lookup.year}) to Radarr — profile: {qp.name}, root: {rf.path}. Search triggered."
+    },
+    {
+      "name": "tts_announce",
+      "_comment": "Calls a Home Assistant script that wakes a media player, sets volume, and speaks the captured text. The script encapsulates all sequencing (turn_on + delay + volume + tts.<engine>_say) so the bridge stays generic. Requires HA_URL, HA_TOKEN, HA_TTS_SCRIPT in .env, and a matching script on the HA side that accepts a `message` field. See README for an example script.",
+      "match": "^announce\\s+(?P<value>.+)$",
+      "match_flags": "IGNORECASE|DOTALL",
+      "steps": [
+        {
+          "method": "POST",
+          "url": "${HA_URL}/api/services/script/${HA_TTS_SCRIPT}",
+          "headers": {
+            "Authorization": "Bearer ${HA_TOKEN}",
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "message": "{value}"
+          },
+          "fail_message": "TTS script failed ({status}): {body}"
+        }
+      ],
+      "reply": "OK: announced \"{value}\""
     }
   ]
 }
