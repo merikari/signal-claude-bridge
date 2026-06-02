@@ -142,6 +142,12 @@ SIGNAL_INBOX = os.environ.get("SIGNAL_INBOX", "Signal inbox")
 ATTACH_MD = os.environ.get("ATTACH_MD", "true").lower() in ("true", "1", "yes")
 HISTORY_DEPTH = int(os.environ.get("HISTORY_DEPTH", "5"))
 
+# Liveness heartbeat (optional). The bridge POSTs to this webhook after every
+# successful Signal poll; an external dead-man's-switch (e.g. a Home Assistant
+# timer) alerts if the pings stop. Empty = disabled.
+HEARTBEAT_WEBHOOK_URL = os.environ.get("HEARTBEAT_WEBHOOK_URL", "").strip()
+HEARTBEAT_INTERVAL = float(os.environ.get("HEARTBEAT_INTERVAL", "60"))
+
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 RESEARCH_PROMPT = (PROMPTS_DIR / "research.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
 FREEFORM_PROMPT = (PROMPTS_DIR / "freeform.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
@@ -500,6 +506,7 @@ async def main() -> None:
     last_error_emit = 0.0
     last_error_msg = ""
     suppressed_count = 0
+    last_heartbeat = 0.0
 
     async with httpx.AsyncClient() as client:
         while True:
@@ -510,6 +517,17 @@ async def main() -> None:
                     log.info("receive loop recovered (suppressed %d repeats)", suppressed_count)
                     last_error_msg = ""
                     suppressed_count = 0
+                # Success-gated heartbeat: only ping after a poll that actually
+                # reached the Signal API. If signal_receive() raised (Docker down,
+                # API unreachable, ...) we never get here, so the external
+                # dead-man's-switch fires — which is exactly what we want.
+                now = asyncio.get_event_loop().time()
+                if HEARTBEAT_WEBHOOK_URL and (now - last_heartbeat) >= HEARTBEAT_INTERVAL:
+                    try:
+                        await client.post(HEARTBEAT_WEBHOOK_URL, timeout=5.0)
+                    except Exception as e:
+                        log.debug("heartbeat ping failed: %s", e)
+                    last_heartbeat = now
                 for env in envelopes:
                     parsed = extract_message(env)
                     if not parsed:

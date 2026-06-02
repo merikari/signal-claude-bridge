@@ -60,6 +60,17 @@ Phone (Signal)
 
 Everything runs locally. No data leaves your machine except through Signal's own E2EE channel and Claude's API.
 
+### Terminology
+
+Four moving parts, deliberately distinct — don't conflate them:
+
+- **Prompts** (`prompts/*.md`) — the per-mode system prompts (research / freeform / url) that drive every Claude invocation.
+- **Domain templates** — the `###` sections inside `Signal inbox/CLAUDE.md` that define the output schema per topic type (term, product, travel…). Edited in your workspace, not the repo.
+- **Skills** (`skills.json`) — workspace `SKILL.md` files injected into the prompt on keyword match, when the action benefits from Claude's reasoning.
+- **Intents** (`intents.json`) — regex→HTTP pipelines that bypass Claude entirely for deterministic, well-shaped actions.
+
+(The repo's `template/` folder is an unrelated starter-workspace scaffold — a one-time copy to bootstrap your workspace, not one of the above.)
+
 ---
 
 ## Requirements
@@ -186,7 +197,7 @@ Intents (see [Intent dispatcher](#intent-dispatcher)) can reference additional `
 
 The bridge runs `claude -p` with `cwd` set to `VAULT_ROOT`. Claude Code automatically reads any `CLAUDE.md` files it finds there — this is how the output format and domain templates reach the model.
 
-This repo ships a ready-to-use template under `template/`. Copy it into your workspace:
+This repo ships a ready-to-use starter-workspace scaffold under `template/` (distinct from the domain templates it contains). Copy it into your workspace:
 
 ```powershell
 # from the repo root — adjust destination to your VAULT_ROOT
@@ -203,7 +214,7 @@ The output folder name (`Signal inbox` by default) is set by `SIGNAL_INBOX` in `
 
 **Editing domain templates:** the `CLAUDE.md` inside your inbox folder lives in your workspace, not the repo. Changes take effect immediately — no daemon restart. To add a new domain, just add a `###` subsection; `prompts/research.md` is generic and needs no changes.
 
-If you use [Obsidian](https://obsidian.md), the included templates produce Obsidian-flavoured markdown — YAML frontmatter, `[[wikilinks]]`, and `ai-generated` tags. If you use a plain markdown folder or a different tool, edit the inbox `CLAUDE.md` and the prompt files to match your preferred format. The bridge itself is format-agnostic.
+If you use [Obsidian](https://obsidian.md), the included domain templates produce Obsidian-flavoured markdown — YAML frontmatter, `[[wikilinks]]`, and `ai-generated` tags. If you use a plain markdown folder or a different tool, edit the inbox `CLAUDE.md` and the prompt files to match your preferred format. The bridge itself is format-agnostic.
 
 ---
 
@@ -287,7 +298,7 @@ If `intents.json` is missing or contains no intents, dispatch is disabled and al
 
 ### Schema
 
-Each intent has a `match` regex, an ordered list of `steps` (HTTP calls or control steps), and a `reply` template. Step responses are saved under `save_as`, optionally narrowed with `extract`, and later steps can reference them via `{name.path}`. `${ENV_VAR}` placeholders expand from `.env` at request time. See `intents.example.json` for full field documentation and a working example.
+Each intent has a `match` regex, an ordered list of `steps` (HTTP calls or control steps), and a `reply` format string (a string-interpolation template, unrelated to the domain templates). Step responses are saved under `save_as`, optionally narrowed with `extract`, and later steps can reference them via `{name.path}`. `${ENV_VAR}` placeholders expand from `.env` at request time. See `intents.example.json` for full field documentation and a working example.
 
 ### When to use intents vs skills
 
@@ -311,6 +322,17 @@ When a message contains referential words (e.g. "that", "previous", "last", "exp
 Claude can also maintain a `.bridge-memory.md` file in the inbox folder for durable preferences (e.g. "always write recipes in Finnish"). This file is loaded into every invocation's system prompt if it exists. Claude creates and appends to it when it detects a standing preference in your message.
 
 Both files are auto-managed — no manual maintenance required. To reset history, delete `.bridge-history.jsonl`. To reset preferences, delete `.bridge-memory.md`.
+
+---
+
+## Liveness heartbeat (optional)
+
+The bridge can POST to a webhook after every successful Signal poll, so an external monitor can alert you if it goes silent. Configure in `.env`:
+
+- `HEARTBEAT_WEBHOOK_URL` — URL to ping (empty = disabled). The ping fires **only after a poll that actually reached the Signal API**, so a downed `signal-cli-rest-api` container stops the heartbeat too — not just a crashed daemon.
+- `HEARTBEAT_INTERVAL` — minimum seconds between pings (default `60`).
+
+The watchdog itself lives outside the bridge. The reference setup is a Home Assistant dead-man's-switch: a webhook automation restarts a 6-minute `timer` on each ping, and a `timer.finished` automation sends a mobile-app push if the pings stop (covering daemon crash, Docker-down, and machine/network outages alike).
 
 ---
 
