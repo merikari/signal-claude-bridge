@@ -13,7 +13,7 @@ You send a Signal message to yourself (Note to Self). The bridge picks it up and
 | Message type | Example | What happens |
 |---|---|---|
 | Bare URL | `https://example.com/article` | Claude fetches the page, classifies the domain from content, and writes a structured note |
-| Short topic (≤ 4 words, no sentence punctuation) | `stoicism` | Claude researches the topic online and writes a short markdown note to your output folder |
+| Short topic (≤ 4 words, ≤ 60 chars, no sentence punctuation) | `stoicism` | Claude researches the topic online and writes a short markdown note to your output folder |
 | Longer instruction | `summarise the key points of the EU AI Act and save it to my notes` | Claude follows the instruction directly |
 | Intent match (optional) | depends on your `intents.json` — e.g. `add Dune Part Two to Radarr` | Bridge runs a config-driven HTTP pipeline and replies — Claude is not invoked. See [Intent dispatcher](#intent-dispatcher) |
 
@@ -178,13 +178,13 @@ All settings live in `.env` (copy from `.env.example`):
 | `CLAUDE_BIN` | `claude` | Path to Claude Code CLI executable |
 | `CLAUDE_MODEL` | *(CLI default)* | Model for `claude -p`, e.g. `claude-sonnet-4-6` |
 | `CLAUDE_TIMEOUT` | `300` | Max seconds to wait for Claude subprocess |
-| `CLAUDE_TOOLS` | `Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` | Comma-separated built-in tools available to Claude (Bash excluded by default for security) |
+| `CLAUDE_TOOLS` | `Read,Write,Edit,Glob,Grep,WebSearch` | Comma-separated built-in tools available to Claude (Bash and WebFetch excluded by default for security; WebFetch is auto-added for bare-URL messages only) |
 | `SIGNAL_API_PORT` | `8090` | Host port for docker-compose only — sets the container's published port. Not read by the Python daemon; update `SIGNAL_API_URL` to match if you change this |
 | `SIGNAL_API_URL` | `http://127.0.0.1:8090` | signal-cli-rest-api base URL used by the daemon |
 | `SIGNAL_NUMBER` | *(required)* | Your E.164 Signal number |
 | `ALLOWED_SENDERS` | `SIGNAL_NUMBER` | Comma-separated allowlist of sender numbers |
 | `POLL_INTERVAL` | `3` | Seconds between `/v1/receive` polls |
-| `SHORT_TOPIC_MAX_TOKENS` | `4` | Token threshold for research vs freeform mode |
+| `SHORT_TOPIC_MAX_TOKENS` | `4` | Max **words** for research vs freeform mode (the name says "tokens" but it counts whitespace-separated words). Research mode also requires ≤60 chars and no sentence punctuation/newline |
 | `SIGNAL_INBOX` | `Signal inbox` | Subfolder (relative to `VAULT_ROOT`) where research notes are written — must contain a `CLAUDE.md` with domain templates |
 | `ATTACH_MD` | `true` | Attach generated .md files to the Signal reply as downloadable files |
 | `HISTORY_DEPTH` | `5` | Number of recent messages to include as context for follow-up queries |
@@ -269,6 +269,7 @@ copy skills.example.json skills.json
 | `keywords` | Case-insensitive words that trigger this skill — if any keyword appears in the message, the skill is injected |
 | `skill_path` | Path to the skill's `SKILL.md`, relative to `VAULT_ROOT` |
 | `extra_tools` | Additional built-in tools to enable for this skill (appended to `CLAUDE_TOOLS`). Leave empty to use defaults |
+| `mcp_config` | *(optional)* Path (relative to `VAULT_ROOT`) to an MCP config JSON loaded **only** for invocations this skill matches. Bridge sessions run with `--strict-mcp-config` (MCP off by default); set this if the skill genuinely needs a server. Omit to keep MCP disabled |
 
 If `skills.json` is missing, the bridge starts normally with skill injection disabled. Multiple skills can match a single message (they're additive).
 
@@ -313,13 +314,15 @@ The bridge maintains a lightweight message history so follow-up queries like "te
 
 ### How it works
 
-After each successful invocation, the bridge appends a one-line summary to `{SIGNAL_INBOX}/.bridge-history.jsonl`. On the next message, the last N entries (controlled by `HISTORY_DEPTH`, default 5) are included in the system prompt as context.
+After each successful invocation, the bridge appends a one-line summary to `{SIGNAL_INBOX}/.bridge-history.jsonl` (capped at the most recent 100 entries; older lines are trimmed automatically). On the next message, the last N entries (controlled by `HISTORY_DEPTH`, default 5) are included in the system prompt as context.
 
 When a message contains referential words (e.g. "that", "previous", "last", "expand", or Finnish equivalents like "edellinen", "lisää"), the bridge also reads the first 500 characters of the most recent output note and includes them as additional context.
 
 ### Persistent memory
 
 Claude can also maintain a `.bridge-memory.md` file in the inbox folder for durable preferences (e.g. "always write recipes in Finnish"). This file is loaded into every invocation's system prompt if it exists. Claude creates and appends to it when it detects a standing preference in your message.
+
+> **Note:** because every message can append to this file and it is injected into every future prompt, it is a persistent instruction surface. The bridge injects it labelled as untrusted recalled *data* (not commands) and caps its size, but if you ever share the bridge or relax `ALLOWED_SENDERS`, review `.bridge-memory.md` periodically and delete anything you didn't intend.
 
 Both files are auto-managed — no manual maintenance required. To reset history, delete `.bridge-history.jsonl`. To reset preferences, delete `.bridge-memory.md`.
 
@@ -343,7 +346,12 @@ The watchdog itself lives outside the bridge. The reference setup is a Home Assi
 - **Sender allowlist** — `ALLOWED_SENDERS` defaults to your own number. Messages from anyone else are logged and dropped before Claude is invoked.
 - **No inbound ports** are opened on your router.
 - **Image is pinned** to a specific release tag in `docker-compose.yml`. Upgrades are deliberate.
-- **Tool restriction** — `CLAUDE_TOOLS` controls which built-in tools Claude has access to. Bash is excluded by default to prevent prompt injection from fetched web pages or skill content reaching a shell.
+- **Tool restriction** — `CLAUDE_TOOLS` controls which built-in tools Claude has access to. Bash is excluded by default to prevent prompt injection from fetched web pages or skill content reaching a shell. `WebFetch` is also excluded by default and only enabled for bare-URL messages (the one mode that needs to fetch a page).
+- **MCP servers are blocked.** Spawned sessions run with `--strict-mcp-config` and no `--mcp-config`, so **no** MCP server loads — not even ones configured in your user/project settings. This matters because `--tools` scopes only *built-in* tools; without `--strict-mcp-config`, `mcp__*` tools (e.g. a Home Assistant server) would still load and run under `bypassPermissions`. A skill that genuinely needs an MCP server opts back in per-invocation via its `skills.json` `mcp_config` field.
+
+> **Why the sender allowlist is load-bearing.** Sessions run with `--permission-mode bypassPermissions` (a non-interactive `-p` run can't answer a permission prompt). Under that mode **`permissions.deny` rules are not consulted** — so a deny-rule settings file is *not* a usable guardrail here. The real boundaries are the ones above (`--tools`, `--strict-mcp-config`) plus the sender allowlist, which is what stops anyone but you from reaching the model at all. Keep `ALLOWED_SENDERS` tight.
+
+- **Log hygiene** — the daemon keeps request logging quiet, but anything written *before* this was upgraded may still contain your number and (if heartbeat is enabled) the webhook URL in `logs\bridge*.log`. Delete the `logs\` folder to purge historical copies; it's gitignored and regenerated on next start.
 
 ---
 
@@ -365,7 +373,7 @@ docker compose pull && docker compose up -d
 | `400 Bad Request` on `/v1/receive` | Container in `json-rpc` mode | Ensure `MODE: normal` in `docker-compose.yml`, recreate container |
 | `FileNotFoundError` on startup | `CLAUDE_BIN` not resolvable | Leave `CLAUDE_BIN=claude` for auto-discovery, or set an absolute path in `.env` |
 | Bridge silently stops replying after a Claude Code update | (Pre-fix bug) startup-cached `CLAUDE_BIN` pointed at the old versioned dir | Fixed: bridge now re-resolves per message. Restart the service if running an older build |
-| Task shows `Ready` not `Running` | Normal — the VBScript launcher exits immediately after spawning pythonw | Verify the bridge is alive by checking `logs\bridge.log` for recent poll lines. If the log is stale, check `logs\bridge-err.log` |
+| Task shows `Ready` not `Running` | Normal — the VBScript launcher exits immediately after spawning pythonw | Verify the bridge is alive by checking `logs\bridge.log` for recent poll lines. If the log is stale, check `logs\bridge-stderr.log` for startup tracebacks |
 | Messages received but no note written | Claude failed silently | Signal reply will say `FAIL: ...`; check logs for details |
 | System drive filling up | Container log not rotated | Ensure `logging:` block is present in `docker-compose.yml`; recreate the container with `docker compose down && docker compose up -d` to apply it |
 
