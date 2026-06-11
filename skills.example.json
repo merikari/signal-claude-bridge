@@ -4,7 +4,9 @@
       "name": "home-assistant-mcp",
       "keywords": ["lights", "thermostat", "ha", "automation", "temperature", "sensor"],
       "skill_path": ".claude/skills/home-assistant-mcp/SKILL.md",
-      "extra_tools": []
+      "extra_tools": [],
+      "_comment_mcp_config": "Optional. Path (relative to VAULT_ROOT) to an MCP config JSON loaded ONLY for invocations this skill matches. Bridge sessions run with --strict-mcp-config, so MCP servers are off by default; set this if the skill genuinely needs one, e.g. an HA server. Omit to keep MCP fully disabled.",
+      "mcp_config": ""
     },
     {
       "name": "arr-mcp",
