@@ -2,7 +2,10 @@ services:
   signal-cli-rest-api:
     # Pinned to stable release; bump deliberately after reviewing changelog.
     # Release: https://github.com/bbernhard/signal-cli-rest-api/releases
-    image: bbernhard/signal-cli-rest-api:0.98
+    # 0.100 bundles signal-cli 0.14.5, which fixes signal-cli #2059 (incoming
+    # sealed-sender messages dropped with "getServerGuid must not be null" NPE —
+    # affected 0.14.1 shipped in image 0.98). Upgraded 2026-06-12.
+    image: bbernhard/signal-cli-rest-api:0.100
     container_name: signal-cli-rest-api
     restart: unless-stopped
     ports:

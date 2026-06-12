@@ -375,6 +375,7 @@ docker compose pull && docker compose up -d
 | Bridge silently stops replying after a Claude Code update | (Pre-fix bug) startup-cached `CLAUDE_BIN` pointed at the old versioned dir | Fixed: bridge now re-resolves per message. Restart the service if running an older build |
 | Task shows `Ready` not `Running` | Normal — the VBScript launcher exits immediately after spawning pythonw | Verify the bridge is alive by checking `logs\bridge.log` for recent poll lines. If the log is stale, check `logs\bridge-stderr.log` for startup tracebacks |
 | Messages received but no note written | Claude failed silently | Signal reply will say `FAIL: ...`; check logs for details |
+| Bridge silently ignores all messages (no `dispatch:` lines, occasional `400`s) | Outdated signal-cli drops sealed-sender messages — `getServerGuid(...) must not be null` NPE ([signal-cli #2059](https://github.com/AsamK/signal-cli/issues/2059), affects 0.14.1–0.14.4.1). A manual `GET /v1/receive/<number>` shows envelopes with `source:null` and an `exception` field | Upgrade the container: bump `image:` to ≥ `0.100` (bundles signal-cli ≥ 0.14.5), then `docker compose pull && docker compose up -d`. Pairing persists via the named volume |
 | System drive filling up | Container log not rotated | Ensure `logging:` block is present in `docker-compose.yml`; recreate the container with `docker compose down && docker compose up -d` to apply it |
 
 ---
