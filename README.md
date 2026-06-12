@@ -148,10 +148,10 @@ Leave `CLAUDE_BIN=claude` (the default) to get auto-discovery. Override with an 
 .\run.ps1
 ```
 
-Creates `.venv`, installs dependencies, starts the daemon. You should see:
+Creates `.venv`, installs dependencies, starts the daemon. You should see a line like:
 
 ```
-bridge up; signal=+1234567890 workspace=C:\... poll=3.0s
+bridge up; api=http://127.0.0.1:8090 workspace=C:\... inbox=Signal inbox poll=3.0s claude=...\claude.exe tools=Read,Write,Edit,Glob,Grep,WebSearch
 ```
 
 Send yourself a Note to Self — try a single word like `stoicism`. Within ~30 s a new markdown file should appear in your output folder and you'll get a Signal reply.
@@ -370,7 +370,7 @@ docker compose pull && docker compose up -d
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `400 Bad Request` on `/v1/receive` | Container in `json-rpc` mode | Ensure `MODE: normal` in `docker-compose.yml`, recreate container |
+| *Every* `/v1/receive` returns `400 Bad Request` | Container in `json-rpc` mode | Ensure `MODE: normal` in `docker-compose.yml`, recreate container |
 | `FileNotFoundError` on startup | `CLAUDE_BIN` not resolvable | Leave `CLAUDE_BIN=claude` for auto-discovery, or set an absolute path in `.env` |
 | Bridge silently stops replying after a Claude Code update | (Pre-fix bug) startup-cached `CLAUDE_BIN` pointed at the old versioned dir | Fixed: bridge now re-resolves per message. Restart the service if running an older build |
 | Task shows `Ready` not `Running` | Normal — the VBScript launcher exits immediately after spawning pythonw | Verify the bridge is alive by checking `logs\bridge.log` for recent poll lines. If the log is stale, check `logs\bridge-stderr.log` for startup tracebacks |
