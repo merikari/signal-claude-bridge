@@ -12,3 +12,7 @@ intents.json
 
 # Pairing QR — contains a linking URI for your Signal account
 qr.png
+
+# Isolated Claude Code config dir for the bridge — holds the bridge's own
+# stored credentials. Never commit.
+.claude-config/

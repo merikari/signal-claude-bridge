@@ -142,7 +142,27 @@ Open `.env` and fill in at minimum:
 
 Leave `CLAUDE_BIN=claude` (the default) to get auto-discovery. Override with an absolute path only if you need to pin a specific install.
 
-### 4. Run manually (first test)
+### 4. Authenticate Claude for the bridge (one-time)
+
+The bridge runs `claude -p` non-interactively, so it depends entirely on stored credentials. To keep that login from being clobbered or expired by your *interactive* `claude` sessions (and by managed/SDK hosts that refresh auth on their own schedule — a common cause of the bridge suddenly returning `401` on every message), the bridge uses its **own isolated config directory**: `.claude-config/` inside the repo (gitignored). It does **not** share `~/.claude`.
+
+Authenticate that directory once. In PowerShell, from the repo root:
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = "$PWD\.claude-config"
+claude            # then run /login inside the session, or:
+claude setup-token   # long-lived token, best for an unattended daemon
+```
+
+Verify it worked (should print a line, not `Not logged in` or a `401`):
+
+```powershell
+claude -p "say OK"
+```
+
+You only do this once. The bridge always points `claude -p` at this directory regardless of how the daemon is launched, so the credential survives reboots and Claude Code updates. (To use a shared/global login instead, set `CLAUDE_CONFIG_DIR` in `.env` to that dir — but the isolated default is recommended.)
+
+### 5. Run manually (first test)
 
 ```powershell
 .\run.ps1
@@ -156,7 +176,7 @@ bridge up; api=http://127.0.0.1:8090 workspace=C:\... inbox=Signal inbox poll=3.
 
 Send yourself a Note to Self — try a single word like `stoicism`. Within ~30 s a new markdown file should appear in your output folder and you'll get a Signal reply.
 
-### 5. Install as a background service
+### 6. Install as a background service
 
 Once the end-to-end test passes, register the daemon as a Windows scheduled task — no terminal window, auto-starts at logon, restarts on failure:
 
@@ -178,6 +198,7 @@ All settings live in `.env` (copy from `.env.example`):
 | `CLAUDE_BIN` | `claude` | Path to Claude Code CLI executable |
 | `CLAUDE_MODEL` | *(CLI default)* | Model for `claude -p`, e.g. `claude-sonnet-4-6` |
 | `CLAUDE_TIMEOUT` | `300` | Max seconds to wait for Claude subprocess |
+| `CLAUDE_CONFIG_DIR` | `.claude-config` (in repo) | Isolated Claude Code config/credential dir for the bridge, so its login isn't clobbered by interactive `claude` sessions. Authenticated once (see setup step 4). Override to point at a shared login if you prefer |
 | `CLAUDE_TOOLS` | `Read,Write,Edit,Glob,Grep,WebSearch` | Comma-separated built-in tools available to Claude (Bash and WebFetch excluded by default for security; WebFetch is auto-added for bare-URL messages only) |
 | `SIGNAL_API_PORT` | `8090` | Host port for docker-compose only — sets the container's published port. Not read by the Python daemon; update `SIGNAL_API_URL` to match if you change this |
 | `SIGNAL_API_URL` | `http://127.0.0.1:8090` | signal-cli-rest-api base URL used by the daemon |
@@ -375,6 +396,7 @@ docker compose pull && docker compose up -d
 | Bridge silently stops replying after a Claude Code update | (Pre-fix bug) startup-cached `CLAUDE_BIN` pointed at the old versioned dir | Fixed: bridge now re-resolves per message. Restart the service if running an older build |
 | Task shows `Ready` not `Running` | Normal — the VBScript launcher exits immediately after spawning pythonw | Verify the bridge is alive by checking `logs\bridge.log` for recent poll lines. If the log is stale, check `logs\bridge-stderr.log` for startup tracebacks |
 | Messages received but no note written | Claude failed silently | Signal reply will say `FAIL: ...`; check logs for details |
+| Every message replies `FAIL: claude exited 1` (often with `401`/`Invalid authentication credentials`) | The bridge's Claude login is missing or expired — usually because credentials were shared with another `claude` session/host that overwrote them | Authenticate the bridge's isolated config dir (setup step 4): `$env:CLAUDE_CONFIG_DIR="$PWD\.claude-config"; claude` → `/login` (or `claude setup-token`), then restart the bridge. Startup also logs a warning if this dir has no credentials |
 | Bridge silently ignores all messages (no `dispatch:` lines, occasional `400`s) | Outdated signal-cli drops sealed-sender messages — `getServerGuid(...) must not be null` NPE ([signal-cli #2059](https://github.com/AsamK/signal-cli/issues/2059), affects 0.14.1–0.14.4.1). A manual `GET /v1/receive/<number>` shows envelopes with `source:null` and an `exception` field | Upgrade the container: bump `image:` to ≥ `0.100` (bundles signal-cli ≥ 0.14.5), then `docker compose pull && docker compose up -d`. Pairing persists via the named volume |
 | System drive filling up | Container log not rotated | Ensure `logging:` block is present in `docker-compose.yml`; recreate the container with `docker compose down && docker compose up -d` to apply it |
 

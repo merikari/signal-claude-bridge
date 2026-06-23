@@ -61,6 +61,30 @@ _CLAUDE_BIN_RAW = os.environ.get("CLAUDE_BIN", "claude")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "")  # e.g. claude-sonnet-4-6; empty = CLI default
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", "300"))
 
+# Dedicated, isolated Claude Code config dir for the bridge.
+#
+# The spawned `claude -p` is non-interactive and depends entirely on stored
+# credentials. If it shares the user's *global* config dir (the default
+# ~/.claude), those credentials get overwritten or expired out from under it by
+# interactive `claude` sessions and by managed/SDK hosts that refresh auth on
+# their own schedule — which surfaces as a silent 401 on every message. Pinning
+# CLAUDE_CONFIG_DIR to a bridge-owned directory isolates the bridge's login from
+# everything else, so a single one-time auth keeps working indefinitely.
+#
+# Default lives inside the repo (gitignored). Authenticate it once with:
+#   CLAUDE_CONFIG_DIR=<dir> claude     then /login     (or `claude setup-token`)
+CLAUDE_CONFIG_DIR = os.environ.get(
+    "CLAUDE_CONFIG_DIR", str(Path(__file__).parent / ".claude-config")
+)
+os.makedirs(CLAUDE_CONFIG_DIR, exist_ok=True)
+if not (Path(CLAUDE_CONFIG_DIR) / ".credentials.json").exists() and not os.environ.get("ANTHROPIC_API_KEY"):
+    log.warning(
+        "claude config dir %s has no stored credentials and ANTHROPIC_API_KEY is unset; "
+        "`claude -p` will 401 on every message. Authenticate once: set "
+        "CLAUDE_CONFIG_DIR=%s in your shell, then run `claude` and /login (or `claude setup-token`).",
+        CLAUDE_CONFIG_DIR, CLAUDE_CONFIG_DIR,
+    )
+
 
 def _resolve_claude_bin(value: str) -> str:
     """Resolve CLAUDE_BIN to an absolute path that exists.
@@ -412,6 +436,9 @@ async def run_claude(
     proc = await asyncio.create_subprocess_exec(
         *args,
         cwd=str(VAULT_ROOT),
+        # Force the bridge-owned config dir regardless of how the daemon was
+        # launched, so claude -p never falls back to the shared global creds.
+        env={**os.environ, "CLAUDE_CONFIG_DIR": CLAUDE_CONFIG_DIR},
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -425,8 +452,11 @@ async def run_claude(
     stdout = stdout_b.decode("utf-8", errors="replace").strip()
     stderr = stderr_b.decode("utf-8", errors="replace").strip()
     if proc.returncode != 0:
-        log.warning("claude exit=%s stderr=%s", proc.returncode, stderr[:500])
-        return f"FAIL: claude exited {proc.returncode}: {stderr[:200]}"
+        # claude prints some fatal errors (notably auth 401s) to stdout, not
+        # stderr — fall back to stdout so the reason is never lost to the log.
+        detail = stderr or stdout
+        log.warning("claude exit=%s detail=%s", proc.returncode, detail[:500])
+        return f"FAIL: claude exited {proc.returncode}: {detail[:200]}"
 
     lines = [ln for ln in stdout.splitlines() if ln.strip()]
     if not lines:
