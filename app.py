@@ -77,11 +77,20 @@ CLAUDE_CONFIG_DIR = os.environ.get(
     "CLAUDE_CONFIG_DIR", str(Path(__file__).parent / ".claude-config")
 )
 os.makedirs(CLAUDE_CONFIG_DIR, exist_ok=True)
-if not (Path(CLAUDE_CONFIG_DIR) / ".credentials.json").exists() and not os.environ.get("ANTHROPIC_API_KEY"):
+# Auth can come from any of: a stored .credentials.json in the isolated config
+# dir (interactive /login), a long-lived CLAUDE_CODE_OAUTH_TOKEN (from
+# `claude setup-token`, recommended for an unattended daemon), or an
+# ANTHROPIC_API_KEY. Warn only if none of them is present.
+if (
+    not (Path(CLAUDE_CONFIG_DIR) / ".credentials.json").exists()
+    and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    and not os.environ.get("ANTHROPIC_API_KEY")
+):
     log.warning(
-        "claude config dir %s has no stored credentials and ANTHROPIC_API_KEY is unset; "
-        "`claude -p` will 401 on every message. Authenticate once: set "
-        "CLAUDE_CONFIG_DIR=%s in your shell, then run `claude` and /login (or `claude setup-token`).",
+        "no Claude credentials found: %s has no .credentials.json and neither "
+        "CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set; `claude -p` will 401 "
+        "on every message. Run `claude setup-token` and put the token in .env as "
+        "CLAUDE_CODE_OAUTH_TOKEN, or authenticate CLAUDE_CONFIG_DIR=%s via /login.",
         CLAUDE_CONFIG_DIR, CLAUDE_CONFIG_DIR,
     )
 

@@ -144,23 +144,40 @@ Leave `CLAUDE_BIN=claude` (the default) to get auto-discovery. Override with an 
 
 ### 4. Authenticate Claude for the bridge (one-time)
 
-The bridge runs `claude -p` non-interactively, so it depends entirely on stored credentials. To keep that login from being clobbered or expired by your *interactive* `claude` sessions (and by managed/SDK hosts that refresh auth on their own schedule — a common cause of the bridge suddenly returning `401` on every message), the bridge uses its **own isolated config directory**: `.claude-config/` inside the repo (gitignored). It does **not** share `~/.claude`.
+The bridge runs `claude -p` non-interactively, so it depends entirely on stored credentials. The pitfall: if it shares your global `~/.claude` login, that login gets overwritten or expired out from under it by your *interactive* `claude` sessions and by managed/SDK hosts that refresh auth on their own schedule — which surfaces as a silent `401` on **every** message. So give the bridge its own credential that nothing else touches.
 
-Authenticate that directory once. In PowerShell, from the repo root:
+**Recommended — a long-lived token in `.env`** (best for an unattended daemon; no shared credential file to clobber):
+
+```powershell
+# On Windows `claude` is usually not on PATH — resolve the exe first:
+$claude = (Get-ChildItem "$env:APPDATA\Claude\claude-code\*\claude.exe" |
+           Sort-Object FullName -Descending | Select-Object -First 1).FullName
+
+& $claude setup-token   # complete the browser step; it prints a long-lived token
+```
+
+`setup-token` does **not** write a credential file — it prints a token. Copy it into `.env` (gitignored):
+
+```
+CLAUDE_CODE_OAUTH_TOKEN=<the token from setup-token>
+```
+
+The bridge passes its environment through to `claude -p`, so the token is picked up on the next message. Verify before relying on it:
+
+```powershell
+$env:CLAUDE_CODE_OAUTH_TOKEN = "<the token>"
+& $claude -p "say OK"    # should print OK, not "Not logged in" / 401
+```
+
+**Alternative — interactive login into an isolated config dir.** The bridge defaults `CLAUDE_CONFIG_DIR` to a repo-local `.claude-config/` (gitignored) so an interactive login lands somewhere private rather than in shared `~/.claude`. Authenticate it once:
 
 ```powershell
 $env:CLAUDE_CONFIG_DIR = "$PWD\.claude-config"
-claude            # then run /login inside the session, or:
-claude setup-token   # long-lived token, best for an unattended daemon
+& $claude               # then run /login inside the session
+& $claude -p "say OK"    # verify
 ```
 
-Verify it worked (should print a line, not `Not logged in` or a `401`):
-
-```powershell
-claude -p "say OK"
-```
-
-You only do this once. The bridge always points `claude -p` at this directory regardless of how the daemon is launched, so the credential survives reboots and Claude Code updates. (To use a shared/global login instead, set `CLAUDE_CONFIG_DIR` in `.env` to that dir — but the isolated default is recommended.)
+Either way you do this only once; the credential survives reboots and Claude Code updates. Auth precedence: `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` (env) take effect regardless of `CLAUDE_CONFIG_DIR`; otherwise the stored login in `CLAUDE_CONFIG_DIR` is used. The bridge logs a startup warning if none of these is present.
 
 ### 5. Run manually (first test)
 
@@ -199,6 +216,7 @@ All settings live in `.env` (copy from `.env.example`):
 | `CLAUDE_MODEL` | *(CLI default)* | Model for `claude -p`, e.g. `claude-sonnet-4-6` |
 | `CLAUDE_TIMEOUT` | `300` | Max seconds to wait for Claude subprocess |
 | `CLAUDE_CONFIG_DIR` | `.claude-config` (in repo) | Isolated Claude Code config/credential dir for the bridge, so its login isn't clobbered by interactive `claude` sessions. Authenticated once (see setup step 4). Override to point at a shared login if you prefer |
+| `CLAUDE_CODE_OAUTH_TOKEN` | *(unset)* | Long-lived token from `claude setup-token` — the recommended auth for an unattended daemon (see setup step 4). Takes precedence over a stored login. Keep it in `.env` only (never commit) |
 | `CLAUDE_TOOLS` | `Read,Write,Edit,Glob,Grep,WebSearch` | Comma-separated built-in tools available to Claude (Bash and WebFetch excluded by default for security; WebFetch is auto-added for bare-URL messages only) |
 | `SIGNAL_API_PORT` | `8090` | Host port for docker-compose only — sets the container's published port. Not read by the Python daemon; update `SIGNAL_API_URL` to match if you change this |
 | `SIGNAL_API_URL` | `http://127.0.0.1:8090` | signal-cli-rest-api base URL used by the daemon |
