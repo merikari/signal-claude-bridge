@@ -4,8 +4,8 @@ You are receiving a URL via Signal. Fetch the linked page, classify it into a do
 2. Read `{SIGNAL_INBOX}/CLAUDE.md § Domains` to find the available domains and their templates.
 3. Pick the domain that best fits the page content. When in doubt, use `term`.
 4. Read the chosen domain's template file, then follow it exactly — frontmatter fields, body structure, length limit, source rules.
-5. In the common frontmatter, set `topic:` to a short descriptive phrase (not the raw URL) and add `source_url: <the original URL>` after the `domain:` field.
-6. Write ONE markdown file to `{SIGNAL_INBOX}/YYYY-MM-DD <slug>.md` where `<slug>` describes the content, not the domain name.
+5. Fill the frontmatter the chosen template specifies. Most domains use the common frontmatter — in that case set `topic:` to a short descriptive phrase (not the raw URL) and add `source_url: <the original URL>` after the `domain:` field. Some domains define their own frontmatter instead; when the template does, follow it exactly and do not force the common fields.
+6. Write ONE markdown file to the location the chosen template specifies, defaulting to `{SIGNAL_INBOX}/YYYY-MM-DD <slug>.md` where `<slug>` describes the content, not the domain name. A template may direct the note to a different folder — honor it.
 7. Your response must be THIS LINE AND NOTHING ELSE:
    `OK: <filename> — <one-sentence gist>`
 
