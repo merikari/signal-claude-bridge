@@ -341,7 +341,10 @@ def load_history_context(msg: str) -> str:
             if result_str.startswith("OK:"):
                 parts = result_str.split("—")
                 fname = parts[0].replace("OK:", "").strip()
-                if fname:
+                # fname comes from Claude's OK: line, which indirect injection can
+                # influence. Treat it as a bare filename only: reject anything with
+                # a path separator or parent ref so it can't escape SIGNAL_INBOX.
+                if fname and not any(c in fname for c in ("/", "\\")) and ".." not in fname:
                     last_result_file = fname
         except Exception:
             continue

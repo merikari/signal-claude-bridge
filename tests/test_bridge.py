@@ -5,6 +5,7 @@ referential-word detector, and the dispatcher's templating + matching. One mocke
 end-to-end intent flow locks in run_intent's step pipeline.
 """
 
+import json
 import re
 
 import httpx
@@ -254,3 +255,43 @@ async def test_run_intent_http_error_status(monkeypatch):
     reply = await idp.run_intent(intent, {"value": "x"})
     assert reply.startswith("FAIL:")
     assert "500" in reply
+
+
+# --- load_history_context: last_result_file path safety ---------------------
+
+def _setup_inbox(monkeypatch, tmp_path, result_line):
+    """Point app at a temp vault, seed one history entry, return the inbox dir."""
+    inbox = tmp_path / "Signal inbox"
+    inbox.mkdir()
+    entry = {"ts": "2026-06-29T00:00:00", "msg": "save it",
+             "mode": "note", "result": result_line}
+    (inbox / ".bridge-history.jsonl").write_text(
+        json.dumps(entry) + "\n", encoding="utf-8")
+    monkeypatch.setattr(app, "VAULT_ROOT", tmp_path)
+    monkeypatch.setattr(app, "SIGNAL_INBOX", "Signal inbox")
+    monkeypatch.setattr(app, "_HISTORY_PATH", None)
+    return inbox
+
+
+def test_load_history_context_reads_bare_filename(monkeypatch, tmp_path):
+    """Positive control: a bare filename is read for a referential message."""
+    inbox = _setup_inbox(monkeypatch, tmp_path, "OK: note.md — saved")
+    (inbox / "note.md").write_text("BENIGN_NOTE_BODY", encoding="utf-8")
+    ctx = app.load_history_context("tell me more about that")
+    assert "BENIGN_NOTE_BODY" in ctx
+
+
+@pytest.mark.parametrize("bad_name", [
+    "../secret.txt",          # parent-dir traversal
+    "..\\secret.txt",         # backslash traversal (Windows)
+    "sub/note.md",            # forward-slash separator
+    "sub\\note.md",           # backslash separator
+])
+def test_load_history_context_rejects_path_traversal(monkeypatch, tmp_path, bad_name):
+    """A non-bare filename in the OK: line must never be read."""
+    _setup_inbox(monkeypatch, tmp_path, f"OK: {bad_name} — saved")
+    # Plant a secret one level above the inbox; `../secret.txt` would resolve here.
+    (tmp_path / "secret.txt").write_text("TOP_SECRET", encoding="utf-8")
+    ctx = app.load_history_context("tell me more about that")
+    assert "TOP_SECRET" not in ctx
+    assert "Content of most recent note" not in ctx
