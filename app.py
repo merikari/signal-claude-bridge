@@ -187,6 +187,31 @@ SIGNAL_INBOX = os.environ.get("SIGNAL_INBOX", "Signal inbox")
 ATTACH_MD = os.environ.get("ATTACH_MD", "true").lower() in ("true", "1", "yes")
 HISTORY_DEPTH = int(os.environ.get("HISTORY_DEPTH", "5"))
 
+# Where downloaded image attachments are written (vault-relative). Defaults to the
+# Obsidian attachment folder so `![[name]]` embeds resolve. The image-intake prompt
+# and the per-domain CLAUDE.md own all routing/schema logic; this is just transport.
+LIITTEET_DIR = VAULT_ROOT / os.environ.get("LIITTEET_DIR", "3 - Resurssit/300 - Liitteet")
+
+# contentType → file extension whitelist for saved attachments. An attachment
+# whose contentType is not in this map is rejected (not silently saved as .jpg):
+# e.g. image/svg+xml is script-bearing and must never land in the vault.
+_IMAGE_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+    "image/avif": ".avif",
+}
+
+# Cap downloaded attachment size to bound memory and vault writes. The sender
+# allowlist already gates who can send; this is belt-and-suspenders.
+_MAX_ATTACH_BYTES = 25 * 1024 * 1024
+
 # Liveness heartbeat (optional). The bridge POSTs to this webhook after every
 # successful Signal poll; an external dead-man's-switch (e.g. a Home Assistant
 # timer) alerts if the pings stop. Empty = disabled.
@@ -197,6 +222,7 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 RESEARCH_PROMPT = (PROMPTS_DIR / "research.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
 FREEFORM_PROMPT = (PROMPTS_DIR / "freeform.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
 URL_PROMPT = (PROMPTS_DIR / "url.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
+IMAGE_PROMPT = (PROMPTS_DIR / "image.md").read_text(encoding="utf-8").replace("{SIGNAL_INBOX}", SIGNAL_INBOX)
 
 # Short-topic heuristic: ≤ 4 tokens, no sentence punctuation, ≤ 60 chars
 SHORT_TOPIC_RE = re.compile(r"^[^\n.?!]{1,60}$")
@@ -409,6 +435,74 @@ def _encode_attachment(path: Path) -> str | None:
         return None
 
 
+def _attach_basename() -> str:
+    """Timestamped base name for a saved attachment. Isolated so tests can
+    monkeypatch it to a fixed value and exercise the collision suffix loop."""
+    from datetime import datetime
+
+    return f"takuu_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+async def download_attachment(
+    client: httpx.AsyncClient, att: dict, dest_dir: Path
+) -> Path | None:
+    """Download one Signal attachment to dest_dir, return the saved Path or None.
+
+    The saved filename is bridge-generated (takuu_<timestamp>) — never derived
+    from the attacker-supplied att["filename"], so it can't carry a path
+    traversal. The extension comes only from the _IMAGE_EXT whitelist; an
+    unmapped contentType (e.g. image/svg+xml) is rejected outright.
+    """
+    att_id = att.get("id")
+    if att_id is None or att_id == "":  # note: 0 is a valid id, "" / None are not
+        log.warning("attachment has no id; skipping")
+        return None
+    ext = _IMAGE_EXT.get(str(att.get("contentType", "")).lower())
+    if ext is None:
+        log.warning("unsupported attachment contentType %r; skipping",
+                    str(att.get("contentType", ""))[:64])
+        return None
+    url = f"{SIGNAL_API_URL}/v1/attachments/{quote(str(att_id), safe='')}"
+    try:
+        r = await client.get(url, timeout=30.0)
+        r.raise_for_status()
+        clen = r.headers.get("content-length")
+        if clen and clen.isdigit() and int(clen) > _MAX_ATTACH_BYTES:
+            log.warning("attachment too large (content-length=%s); skipping", clen)
+            return None
+        content = r.content
+    except Exception as e:
+        log.warning("attachment download failed: %s", str(e)[:200])
+        return None
+    if not content:
+        log.warning("attachment %s downloaded empty", str(att_id)[:64])
+        return None
+    if len(content) > _MAX_ATTACH_BYTES:
+        log.warning("attachment too large (%d bytes); skipping", len(content))
+        return None
+
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        base = _attach_basename()
+        path = dest_dir / f"{base}{ext}"
+        n = 1
+        while True:
+            try:
+                # Exclusive create: no check-then-write TOCTOU window even if
+                # something else (Obsidian sync, a second instance) writes here.
+                with open(path, "xb") as f:
+                    f.write(content)
+                break
+            except FileExistsError:
+                path = dest_dir / f"{base}_{n}{ext}"
+                n += 1
+    except Exception as e:
+        log.warning("attachment write failed: %s", str(e)[:200])
+        return None
+    log.info("attachment saved: %s", path.name)
+    return path
+
+
 async def run_claude(
     system_prompt: str,
     user_message: str,
@@ -524,7 +618,24 @@ def extract_message(envelope: dict) -> tuple[str, str] | None:
     return source, text
 
 
-async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> None:
+def extract_attachments(envelope: dict) -> list[dict]:
+    """Return image attachments from an envelope.
+
+    Checks both dataMessage.attachments (messages from another device) and
+    syncMessage.sentMessage.attachments (Note-to-Self / messages you send
+    yourself) — mirroring how extract_message reads text from both. Filters to
+    contentType starting "image/"; non-image attachments are ignored.
+    """
+    env = envelope.get("envelope") or envelope
+    data_msg = env.get("dataMessage") or {}
+    sync_msg = (env.get("syncMessage") or {}).get("sentMessage") or {}
+    atts = (data_msg.get("attachments") or []) + (sync_msg.get("attachments") or [])
+    return [a for a in atts if str(a.get("contentType", "")).startswith("image/")]
+
+
+async def handle_message(
+    client: httpx.AsyncClient, sender: str, text: str, images: list[dict] | None = None
+) -> None:
     if sender not in ALLOWED_SENDERS:
         log.warning("drop: sender %s not in allowlist", sender)
         return
@@ -534,10 +645,19 @@ async def handle_message(client: httpx.AsyncClient, sender: str, text: str) -> N
     # history read-modify-write are both unsafe under overlap. One handler at a time
     # keeps the "exactly one new file" attachment model and the history trim correct.
     async with _HANDLE_LOCK:
-        await _handle_message_locked(client, sender, text)
+        await _handle_message_locked(client, sender, text, images)
 
 
-async def _handle_message_locked(client: httpx.AsyncClient, sender: str, text: str) -> None:
+async def _handle_message_locked(
+    client: httpx.AsyncClient, sender: str, text: str, images: list[dict] | None = None
+) -> None:
+    # Image attachments take priority over text routing: download them and hand
+    # Claude a file path under the image-intake prompt. All keyword/schema logic
+    # lives in prompts/image.md + the per-domain CLAUDE.md, not here.
+    if images:
+        await _handle_image(client, sender, text, images)
+        return
+
     # Direct intent dispatch — config-driven HTTP pipelines that bypass Claude
     # for clearly-shaped actions. See intents.json / intents.example.json.
     matched = intent_dispatcher.match_intent(text)
@@ -599,6 +719,42 @@ async def _handle_message_locked(client: httpx.AsyncClient, sender: str, text: s
     log.info("replied: %s", result[:120])
 
 
+async def _handle_image(
+    client: httpx.AsyncClient, sender: str, text: str, images: list[dict]
+) -> None:
+    """Download image attachment(s) and hand Claude a vault-relative path under
+    the image-intake prompt. Default tools only — no WebFetch/MCP for image mode."""
+    saved: list[Path] = []
+    for att in images:
+        path = await download_attachment(client, att, LIITTEET_DIR)
+        if path:
+            saved.append(path)
+    if not saved:
+        await signal_send(client, sender, "FAIL: could not download image attachment(s)", None)
+        log.info("replied: FAIL: could not download image attachment(s)")
+        return
+
+    rels = []
+    for p in saved:
+        try:
+            rels.append(str(p.relative_to(VAULT_ROOT)).replace("\\", "/"))
+        except ValueError:
+            # LIITTEET_DIR misconfigured outside VAULT_ROOT — fall back to the
+            # absolute path rather than crashing the handler after the write.
+            rels.append(str(p).replace("\\", "/"))
+    user_message = "Image(s) saved at:\n" + "\n".join(rels) + f"\nCaption: {text or '(none)'}"
+    failed = len(images) - len(saved)
+    if failed:
+        user_message += f"\nNote: {failed} attachment(s) failed to download and are not listed."
+    log.info("dispatch: mode=image images=%d failed=%d caption=%r",
+             len(saved), failed, (text or "")[:80])
+
+    result = await run_claude(IMAGE_PROMPT, user_message)
+    append_history(text or "(image)", "image", result)
+    await signal_send(client, sender, result, None)
+    log.info("replied: %s", result[:120])
+
+
 async def main() -> None:
     if not VAULT_ROOT.exists():
         raise RuntimeError(f"VAULT_ROOT does not exist: {VAULT_ROOT}")
@@ -638,7 +794,8 @@ async def main() -> None:
                     if not parsed:
                         continue
                     sender, text = parsed
-                    asyncio.create_task(handle_message(client, sender, text))
+                    images = extract_attachments(env)
+                    asyncio.create_task(handle_message(client, sender, text, images))
             except Exception as e:
                 msg = str(e)
                 now = asyncio.get_event_loop().time()

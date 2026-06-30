@@ -102,6 +102,143 @@ def test_extract_message_no_source_returns_none():
     assert app.extract_message(env) is None
 
 
+# --- extract_attachments ----------------------------------------------------
+
+def test_extract_attachments_data_message():
+    env = {"envelope": {"source": "+3581", "dataMessage": {
+        "attachments": [{"id": "a1", "contentType": "image/jpeg"}]}}}
+    assert [a["id"] for a in app.extract_attachments(env)] == ["a1"]
+
+
+def test_extract_attachments_sync_message():
+    # Note-to-Self photos arrive under syncMessage.sentMessage, not dataMessage.
+    env = {"envelope": {"source": "+3581", "syncMessage": {"sentMessage": {
+        "attachments": [{"id": "s1", "contentType": "image/png"}]}}}}
+    assert [a["id"] for a in app.extract_attachments(env)] == ["s1"]
+
+
+def test_extract_attachments_combines_both_lists():
+    env = {"envelope": {
+        "dataMessage": {"attachments": [{"id": "d", "contentType": "image/jpeg"}]},
+        "syncMessage": {"sentMessage": {"attachments": [
+            {"id": "s", "contentType": "image/heic"}]}}}}
+    assert sorted(a["id"] for a in app.extract_attachments(env)) == ["d", "s"]
+
+
+def test_extract_attachments_filters_non_image():
+    env = {"envelope": {"dataMessage": {"attachments": [
+        {"id": "img", "contentType": "image/jpeg"},
+        {"id": "doc", "contentType": "application/pdf"},
+        {"id": "none"},
+    ]}}}
+    assert [a["id"] for a in app.extract_attachments(env)] == ["img"]
+
+
+def test_extract_attachments_empty():
+    env = {"envelope": {"dataMessage": {"message": "hi"}}}
+    assert app.extract_attachments(env) == []
+
+
+# --- download_attachment ----------------------------------------------------
+
+@respx.mock
+async def test_download_attachment_writes_bytes(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
+    respx.get("http://sig.test/v1/attachments/abc").mock(
+        return_value=httpx.Response(200, content=b"\xff\xd8jpegdata"))
+    async with httpx.AsyncClient() as client:
+        path = await app.download_attachment(
+            client, {"id": "abc", "contentType": "image/jpeg"}, tmp_path)
+    assert path is not None
+    assert path.parent == tmp_path
+    assert path.suffix == ".jpg"
+    assert path.name.startswith("takuu_")
+    assert path.read_bytes() == b"\xff\xd8jpegdata"
+
+
+@respx.mock
+async def test_download_attachment_ext_from_contenttype(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
+    respx.get("http://sig.test/v1/attachments/p").mock(
+        return_value=httpx.Response(200, content=b"png"))
+    async with httpx.AsyncClient() as client:
+        path = await app.download_attachment(
+            client, {"id": "p", "contentType": "image/png"}, tmp_path)
+    assert path.suffix == ".png"
+
+
+@respx.mock
+async def test_download_attachment_unsupported_type_rejected(monkeypatch, tmp_path):
+    # image/svg+xml passes the startswith("image/") filter but is script-bearing;
+    # it must be rejected, never saved (and not even downloaded).
+    monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
+    async with httpx.AsyncClient() as client:
+        path = await app.download_attachment(
+            client, {"id": "svg", "contentType": "image/svg+xml"}, tmp_path)
+    assert path is None
+    assert list(tmp_path.iterdir()) == []
+
+
+@respx.mock
+async def test_download_attachment_collision_suffix(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
+    # Freeze the basename so both saves collide deterministically, exercising
+    # the exclusive-create suffix loop regardless of wall-clock timing.
+    monkeypatch.setattr(app, "_attach_basename", lambda: "takuu_FIXED")
+    respx.get("http://sig.test/v1/attachments/x").mock(
+        return_value=httpx.Response(200, content=b"data"))
+    att = {"id": "x", "contentType": "image/jpeg"}
+    async with httpx.AsyncClient() as client:
+        p1 = await app.download_attachment(client, att, tmp_path)
+        p2 = await app.download_attachment(client, att, tmp_path)
+    assert p1.name == "takuu_FIXED.jpg"
+    assert p2.name == "takuu_FIXED_1.jpg"  # second must not clobber the first
+    assert p1.read_bytes() == b"data" and p2.read_bytes() == b"data"
+
+
+async def test_download_attachment_zero_id_is_valid(tmp_path, monkeypatch):
+    # 0 is a falsy-but-valid id; it must not be treated as "no id".
+    monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
+    monkeypatch.setattr(app, "_attach_basename", lambda: "takuu_ZERO")
+    with respx.mock:
+        respx.get("http://sig.test/v1/attachments/0").mock(
+            return_value=httpx.Response(200, content=b"z"))
+        async with httpx.AsyncClient() as client:
+            path = await app.download_attachment(
+                client, {"id": 0, "contentType": "image/jpeg"}, tmp_path)
+    assert path is not None and path.read_bytes() == b"z"
+
+
+@respx.mock
+async def test_download_attachment_http_error_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
+    respx.get("http://sig.test/v1/attachments/bad").mock(
+        return_value=httpx.Response(500, text="boom"))
+    async with httpx.AsyncClient() as client:
+        path = await app.download_attachment(
+            client, {"id": "bad", "contentType": "image/jpeg"}, tmp_path)
+    assert path is None
+    assert list(tmp_path.iterdir()) == []
+
+
+@respx.mock
+async def test_download_attachment_empty_content_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
+    respx.get("http://sig.test/v1/attachments/e").mock(
+        return_value=httpx.Response(200, content=b""))
+    async with httpx.AsyncClient() as client:
+        path = await app.download_attachment(
+            client, {"id": "e", "contentType": "image/jpeg"}, tmp_path)
+    assert path is None
+
+
+async def test_download_attachment_no_id_returns_none(tmp_path):
+    async with httpx.AsyncClient() as client:
+        path = await app.download_attachment(
+            client, {"contentType": "image/jpeg"}, tmp_path)
+    assert path is None
+
+
 # --- _is_referential --------------------------------------------------------
 
 @pytest.mark.parametrize("msg", [

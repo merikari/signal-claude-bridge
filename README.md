@@ -225,6 +225,7 @@ All settings live in `.env` (copy from `.env.example`):
 | `POLL_INTERVAL` | `3` | Seconds between `/v1/receive` polls |
 | `SHORT_TOPIC_MAX_TOKENS` | `4` | Max **words** for research vs freeform mode (the name says "tokens" but it counts whitespace-separated words). Research mode also requires ≤60 chars and no sentence punctuation/newline |
 | `SIGNAL_INBOX` | `Signal inbox` | Subfolder (relative to `VAULT_ROOT`) where research notes are written — must contain a `CLAUDE.md` with domain templates |
+| `LIITTEET_DIR` | `3 - Resurssit/300 - Liitteet` | Subfolder (relative to `VAULT_ROOT`) where image attachments are downloaded — so `![[name]]` embeds resolve in Obsidian |
 | `ATTACH_MD` | `true` | Attach generated .md files to the Signal reply as downloadable files |
 | `HISTORY_DEPTH` | `5` | Number of recent messages to include as context for follow-up queries |
 
