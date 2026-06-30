@@ -152,7 +152,7 @@ async def test_download_attachment_writes_bytes(monkeypatch, tmp_path):
     assert path is not None
     assert path.parent == tmp_path
     assert path.suffix == ".jpg"
-    assert path.name.startswith("takuu_")
+    assert path.name.startswith("signal_")
     assert path.read_bytes() == b"\xff\xd8jpegdata"
 
 
@@ -184,22 +184,22 @@ async def test_download_attachment_collision_suffix(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
     # Freeze the basename so both saves collide deterministically, exercising
     # the exclusive-create suffix loop regardless of wall-clock timing.
-    monkeypatch.setattr(app, "_attach_basename", lambda: "takuu_FIXED")
+    monkeypatch.setattr(app, "_attach_basename", lambda: "signal_FIXED")
     respx.get("http://sig.test/v1/attachments/x").mock(
         return_value=httpx.Response(200, content=b"data"))
     att = {"id": "x", "contentType": "image/jpeg"}
     async with httpx.AsyncClient() as client:
         p1 = await app.download_attachment(client, att, tmp_path)
         p2 = await app.download_attachment(client, att, tmp_path)
-    assert p1.name == "takuu_FIXED.jpg"
-    assert p2.name == "takuu_FIXED_1.jpg"  # second must not clobber the first
+    assert p1.name == "signal_FIXED.jpg"
+    assert p2.name == "signal_FIXED_1.jpg"  # second must not clobber the first
     assert p1.read_bytes() == b"data" and p2.read_bytes() == b"data"
 
 
 async def test_download_attachment_zero_id_is_valid(tmp_path, monkeypatch):
     # 0 is a falsy-but-valid id; it must not be treated as "no id".
     monkeypatch.setattr(app, "SIGNAL_API_URL", "http://sig.test")
-    monkeypatch.setattr(app, "_attach_basename", lambda: "takuu_ZERO")
+    monkeypatch.setattr(app, "_attach_basename", lambda: "signal_ZERO")
     with respx.mock:
         respx.get("http://sig.test/v1/attachments/0").mock(
             return_value=httpx.Response(200, content=b"z"))

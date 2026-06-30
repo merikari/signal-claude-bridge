@@ -190,7 +190,7 @@ HISTORY_DEPTH = int(os.environ.get("HISTORY_DEPTH", "5"))
 # Where downloaded image attachments are written (vault-relative). Defaults to the
 # Obsidian attachment folder so `![[name]]` embeds resolve. The image-intake prompt
 # and the per-domain CLAUDE.md own all routing/schema logic; this is just transport.
-LIITTEET_DIR = VAULT_ROOT / os.environ.get("LIITTEET_DIR", "3 - Resurssit/300 - Liitteet")
+ATTACHMENTS_DIR = VAULT_ROOT / os.environ.get("ATTACHMENTS_DIR", "3 - Resurssit/300 - Liitteet")
 
 # contentType → file extension whitelist for saved attachments. An attachment
 # whose contentType is not in this map is rejected (not silently saved as .jpg):
@@ -440,7 +440,7 @@ def _attach_basename() -> str:
     monkeypatch it to a fixed value and exercise the collision suffix loop."""
     from datetime import datetime
 
-    return f"takuu_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    return f"signal_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 
 async def download_attachment(
@@ -448,7 +448,7 @@ async def download_attachment(
 ) -> Path | None:
     """Download one Signal attachment to dest_dir, return the saved Path or None.
 
-    The saved filename is bridge-generated (takuu_<timestamp>) — never derived
+    The saved filename is bridge-generated (signal_<timestamp>) — never derived
     from the attacker-supplied att["filename"], so it can't carry a path
     traversal. The extension comes only from the _IMAGE_EXT whitelist; an
     unmapped contentType (e.g. image/svg+xml) is rejected outright.
@@ -726,7 +726,7 @@ async def _handle_image(
     the image-intake prompt. Default tools only — no WebFetch/MCP for image mode."""
     saved: list[Path] = []
     for att in images:
-        path = await download_attachment(client, att, LIITTEET_DIR)
+        path = await download_attachment(client, att, ATTACHMENTS_DIR)
         if path:
             saved.append(path)
     if not saved:
@@ -739,7 +739,7 @@ async def _handle_image(
         try:
             rels.append(str(p.relative_to(VAULT_ROOT)).replace("\\", "/"))
         except ValueError:
-            # LIITTEET_DIR misconfigured outside VAULT_ROOT — fall back to the
+            # ATTACHMENTS_DIR misconfigured outside VAULT_ROOT — fall back to the
             # absolute path rather than crashing the handler after the write.
             rels.append(str(p).replace("\\", "/"))
     user_message = "Image(s) saved at:\n" + "\n".join(rels) + f"\nCaption: {text or '(none)'}"
